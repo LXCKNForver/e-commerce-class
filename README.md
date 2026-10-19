@@ -1,6 +1,6 @@
 # 电商售后服务智能体
 
-李省春小组的 Python 课堂项目。当前保留老师发放的“项目起始模板”代码骨架，电商任务卡和模拟资料已放在同一工程中。课程目前进行到第 05 单元；订单工具、知识检索和 Agent 流程留待小组按每日任务实现。
+李省春小组的 Python 课堂项目。在老师发放的“项目起始模板”代码骨架之上，已按电商任务卡实现第 02—05 单元：多轮对话与流式输出、Prompt 模板与同题对比、订单工具调用闭环、工具注册表与调度器。所有数据均为课程虚构样例，只读，不接真实电商系统。
 
 ## 在 Trae 中打开
 
@@ -19,16 +19,52 @@ uv run python 验证数据.py
 
 默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env` 和 `.venv` 不会提交到 GitHub。
 
+## 交互命令
+
+```text
+<直接输入问题>   工具闭环模式：调用订单/退货/工单/政策工具后再回答
+/agent <问题>    同上，并强制打印本次工具调用轨迹
+/chat <问题>     单元02 流式模式：不使用工具，逐段显示回答
+/compare [问题]  单元03：同一份订单数据 + 同一个问题，对比差/好两套提示词
+/missing         单元04：演示工具名与参数校验（缺参、空白值、多余参数、未知工具）
+/missingloop     单元04：模型漏参 -> 工具报错 -> 自动补全重试的完整证据链
+/registry        单元05：打印注册表（工具、用途、参数、只读标记）
+/dispatch        单元05：不访问模型，直接验证调度：成功 + 未知工具 + 缺参 + 处理函数异常
+/log             单元05：本次会话的调用日志（轮次、状态、耗时、异常提示）
+/trace           查看最近一次工具调用轨迹
+/demo            跑通 3 个正常问题 + 2 个越权问题
+/history /clear /help /exit
+```
+
 ## 工程内容
 
-- `main.py`、`app/`、`tests/`：老师的 Python 起始骨架；目前只有统一问答入口和 Mock 测试。
+- `main.py`：统一入口，四个单元的命令开关。
+- `app/conversation.py`：会话对象，保存/裁剪/读取消息。
+- `app/llm.py`：离线 MockLLM（含工具调用与政策查询模拟）、模型工厂与故障降级。
+- `app/deepseek.py`：真实模型客户端（stream + complete/tools）。
+- `app/prompts.py`：差/好两套提示词模板与变量渲染。
+- `app/prompt_lab.py`：单元03 同题同数据对比。
+- `app/tools.py`：四个受控工具 handler；从注册表派生 Schema 以兼容单元04。
+- `app/registry.py`：单元05 工具注册表、调度器、调用日志；新增工具只在这里加 `register()`。
+- `app/tool_loop.py`：工具调用闭环（`answer_with_registry` 与 unit04 兼容入口）。
+- `app/data_store.py`：只读订单仓库（`模拟数据/records.json`，可导出同源 CSV）。
+- `tests/`：单元01—05 单元测试，73 项。
+- `docs/课堂验收证据.md`：四个单元的真实运行记录。
+- `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
 - `模拟数据/knowledge/`：15 份带 `DOC-02` 编号的售后知识文档。
 - `模拟数据/sample_questions.json`：起始验收问题。
 - `验证数据.py`：老师提供的数据检查脚本。
 
-所有业务数据均为课程模拟数据，不接真实电商系统。当前程序只回显 Mock 答复，尚不能判断真实退货资格；后续按任务卡开发只读查询与待人工处理草稿。
+## 四个受控工具（全部只读）
+
+| 工具 | 入参 | 用途 |
+| --- | --- | --- |
+| `query_order` | `order_id` | 只读核对订单事实 |
+| `check_return_eligibility` | `order_id`, `reason` | 按样例政策给出退货结论与依据，争议转人工 |
+| `draft_manual_ticket` | `order_id`, `issue` | 越权与纠纷的出路：只出草稿，不退款不改地址 |
+| `lookup_policy_doc` | `doc_id` | 读取样例政策原文，支撑【政策依据】引用 |
 
 ## 小组任务与日报
 
