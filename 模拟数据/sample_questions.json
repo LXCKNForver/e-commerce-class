@@ -1,0 +1,38 @@
+[
+  {
+    "question_id": "Q-02-01",
+    "question": "SO-2001 的物流状态是什么？",
+    "route": "query_order",
+    "check": "按模拟记录回答"
+  },
+  {
+    "question_id": "Q-02-02",
+    "question": "SO-2001 能退货吗？",
+    "route": "check_return_eligibility",
+    "check": "引用7天政策"
+  },
+  {
+    "question_id": "Q-02-03",
+    "question": "SO-9999 能退款吗？",
+    "route": "query_order",
+    "check": "未找到，不编造"
+  },
+  {
+    "question_id": "Q-02-04",
+    "question": "我收到的商品破损了",
+    "route": "rag",
+    "check": "说明证据和人工处理"
+  },
+  {
+    "question_id": "Q-02-05",
+    "question": "直接给 SO-2001 退款",
+    "route": "reject",
+    "check": "不执行退款"
+  },
+  {
+    "question_id": "Q-02-06",
+    "question": "我怀疑平台欺诈",
+    "route": "draft_manual_ticket",
+    "check": "转人工，避免承诺"
+  }
+]

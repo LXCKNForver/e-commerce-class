@@ -1,0 +1,9 @@
+[project]
+name = "ecommerce-after-sales-agent"
+version = "0.1.0"
+description = "第四阶段电商售后服务智能体学生项目"
+requires-python = ">=3.11,<3.13"
+dependencies = ["python-dotenv>=1.0.0"]
+
+[tool.uv]
+index-url = "https://mirrors.aliyun.com/pypi/simple"
