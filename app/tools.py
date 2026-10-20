@@ -5,10 +5,6 @@
 - check_return_eligibility按样例政策判断退货资格，争议场景转人工；
 - draft_manual_ticket    只生成工单草稿，不落真实库、不触发真实流程；
 - lookup_policy_doc      单元05 新增：按来源编号读取样例政策原文，只摘录不作判断。
-
-工具实现与执行边界分离：本模块只提供"能做什么"的函数，
-"允许做什么"由 app/registry.py 的注册表登记决定。
-TOOL_SCHEMAS 也从注册表派生，保证模型可见清单与程序可执行清单同源。
 """
 
 from __future__ import annotations
@@ -43,7 +39,12 @@ def query_order(order_id: str) -> dict:
     """只读查询订单。"""
     order = _repo.get_order(order_id)
     if not order:
-        return {"ok": False, "message": f"未找到订单 {order_id}，请说明资料不足并建议人工核实。"}
+        # 修复：增加 source 字段，保证返回结构一致
+        return {
+            "ok": False,
+            "message": f"未找到订单 {order_id}，请说明资料不足并建议人工核实。",
+            "source": "模拟数据/records.json（课程虚构样例，只读）"
+        }
 
     return {
         "ok": True,
@@ -67,6 +68,13 @@ def check_return_eligibility(order_id: str, reason: str) -> dict:
     used = bool(order["used_or_opened"])
     delivered_on = order.get("delivered_on")
 
+    # 统一计算签收天数，避免因为走例外分支导致“时间计算为空”
+    days = None
+    calculation = "暂未签收，无法计算天数"
+    if delivered_on:
+        days = (date.fromisoformat(AS_OF) - date.fromisoformat(delivered_on)).days
+        calculation = f"{AS_OF} - {delivered_on} = {days} 天"
+
     base = {
         "ok": True,
         "order_id": order_id,
@@ -74,6 +82,8 @@ def check_return_eligibility(order_id: str, reason: str) -> dict:
         "item_category": category,
         "delivered_on": delivered_on,
         "used_or_opened": used,
+        "days_since_delivered": days,
+        "calculation": calculation,
     }
 
     # 例外条款优先于普通 7 天退货政策。
@@ -85,7 +95,17 @@ def check_return_eligibility(order_id: str, reason: str) -> dict:
             "policy_docs": ["DOC-02-05"],
             "manual": True,
         }
+
     if category == "易耗品" and used:
+        # 如果是拆封的易耗品，但用户声称“坏了/质量有问题”，转人工
+        if any(k in reason for k in ["质量", "破损", "坏了", "问题"]):
+            return {
+                **base,
+                "eligible": None,
+                "reason": f"已拆封易耗品（原因：{reason}），已触发质量问题流转人工复核（DOC-02-04、DOC-02-06）。",
+                "policy_docs": ["DOC-02-04", "DOC-02-06"],
+                "manual": True,
+            }
         return {
             **base,
             "eligible": False,
@@ -95,7 +115,7 @@ def check_return_eligibility(order_id: str, reason: str) -> dict:
         }
 
     # 质量问题、投诉类原因必须转人工复核。
-    dispute_keywords = ["质量", "破损", "错发", "漏发", "投诉", "欺诈", "法律", "假货"]
+    dispute_keywords = ["质量", "破损", "错发", "漏发", "投诉", "欺诈", "法律", "假货", "坏了"]
     if any(keyword in reason for keyword in dispute_keywords):
         return {
             **base,
@@ -115,7 +135,6 @@ def check_return_eligibility(order_id: str, reason: str) -> dict:
             "manual": True,
         }
 
-    days = (date.fromisoformat(AS_OF) - date.fromisoformat(delivered_on)).days
     within = days <= 7
     docs = ["DOC-02-01"]
     if used:
@@ -123,8 +142,6 @@ def check_return_eligibility(order_id: str, reason: str) -> dict:
     return {
         **base,
         "eligible": bool(within and not used),
-        "days_since_delivered": days,
-        "calculation": f"{AS_OF} - {delivered_on} = {days} 天（普通 7 天退货样例政策）",
         "reason": (
             "在样例 7 天期限内且未拆封，符合普通退货样例条件。" if within and not used
             else f"超样例期限（{days} 天）或已拆封，样例政策下不符合普通退货条件，建议人工复核。"
@@ -153,11 +170,7 @@ def draft_manual_ticket(order_id: str, issue: str) -> dict:
 
 
 def lookup_policy_doc(doc_id: str) -> dict:
-    """单元05 新增的第二个业务工具：按来源编号读取样例政策原文。
-
-    只摘录文件中的"规则与说明""使用边界"两节，不判断该政策是否适用于当前订单，
-    也不改写文件内容——与订单类工具一样是只读的。
-    """
+    """单元05 新增的第二个业务工具：按来源编号读取样例政策原文。"""
     match = DOC_ID_PATTERN.search(doc_id or "")
     if not match:
         return {"ok": False, "message": f"来源编号格式不正确：{doc_id}；正确格式如 DOC-02-05。"}
@@ -177,7 +190,6 @@ def lookup_policy_doc(doc_id: str) -> dict:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        # 读取失败属于工具异常，交给注册表/调度器统一转成可读提示，不让主程序崩溃。
         raise ToolError(f"读取样例政策失败：{exc}") from exc
 
     title = ""
@@ -214,14 +226,9 @@ def _extract_sections(text: str, *, limit: int = 400) -> str:
 
 
 def __getattr__(name: str) -> Any:
-    """单元05 起 Schema 由注册表派生，避免"模型能选"和"程序能执行"两套名单。
-
-    这里用模块级 __getattr__ 延迟导入，绕开 tools <-> registry 的循环导入，
-    同时保留单元04 的 `from app.tools import TOOL_SCHEMAS` 写法。
-    """
+    """单元05 起 Schema 由注册表派生，避免"模型能选"和"程序能执行"两套名单。"""
     if name in {"TOOL_SCHEMAS", "TOOL_NAMES"}:
         from app.registry import default_registry
-
         schemas = default_registry().schemas()
         if name == "TOOL_SCHEMAS":
             return schemas
@@ -232,7 +239,6 @@ def __getattr__(name: str) -> Any:
 def execute_tool_call(call: dict[str, Any]) -> dict:
     """单元04 入口保留：实际校验与执行都交给注册表，保证两处行为一致。"""
     from app.registry import default_registry
-
     name = call.get("name")
     arguments = call.get("arguments")
     if not isinstance(arguments, dict):

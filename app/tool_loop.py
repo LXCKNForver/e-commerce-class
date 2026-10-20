@@ -50,16 +50,7 @@ def answer_with_registry(
     max_calls: int = 6,
     require_tool_call: bool = True,
 ) -> tuple[str, list[dict]]:
-    """单元05 调度主循环：模型请求 -> 注册表调度 -> 结果回填 -> 模型作答。
-
-    max_rounds 限制与模型往返的轮数，max_calls 限制整次问答的调用总数，
-    两者共同防止模型反复请求工具造成失控。
-    require_tool_call=True 用于验收：一次工具都没调用就抛错，避免"假闭环"混过检查；
-    交互式入口传 False，让寒暄类输入也能正常作答。
-
-    注意：本轮产生的 assistant/tool 消息会原地追加到 messages，
-    调用方可以复用同一个列表继续下一轮提问，天然保有上下文。
-    """
+    """单元05 调度主循环：模型请求 -> 注册表调度 -> 结果回填 -> 模型作答。"""
     if not messages:
         raise ValueError("messages不能为空")
 
@@ -67,7 +58,6 @@ def answer_with_registry(
     trace: list[dict] = []
 
     for round_index in range(1, max_rounds + 1):
-        # 工具说明直接来自注册表，模型能选的与程序能执行的是同一份名单。
         message = llm.complete(dialog, registry.schemas())
         calls = getattr(message, "tool_calls", None) or []
 
@@ -79,11 +69,9 @@ def answer_with_registry(
                 raise RuntimeError("模型没有发起工具调用，无法证明本次演示形成闭环")
             return content, trace
 
-        # 按整次问答累计调用次数，防止模型跨多轮反复请求工具。
         if len(trace) + len(calls) > max_calls:
             raise ToolError(f"本次问答工具调用超过上限：{max_calls}")
 
-        # 必须先追加含 tool_calls 的 assistant 消息，再按 call id 逐一回填结果。
         dialog.append(message.model_dump(exclude_none=True))
 
         requests: list[dict] = []
@@ -93,11 +81,9 @@ def answer_with_registry(
             try:
                 arguments = json.loads(call.function.arguments)
             except json.JSONDecodeError:
-                # 无效 JSON 交给注册表产生可读错误，不执行任何处理函数。
                 arguments = None
             requests.append({"call_id": call.id, "name": call.function.name, "arguments": arguments})
 
-        # 调度器逐项检查名称与参数；单条失败只体现在该项结果里，不中断本轮。
         for step in registry.dispatch(requests, max_calls=max_calls, round_index=round_index):
             trace.append(step)
             dialog.append(_build_tool_message(step["call_id"], step["name"], step["result"]))
@@ -114,7 +100,6 @@ def answer_with_tools(
     require_tool_call: bool = True,
     registry: ToolRegistry | None = None,
 ) -> tuple[str, list[dict]]:
-    """单元04 入口保留：内部委托给 answer_with_registry 与默认注册表。"""
     return answer_with_registry(
         llm,
         messages,
@@ -132,7 +117,6 @@ def answer_question(
     max_rounds: int = 4,
     registry: ToolRegistry | None = None,
 ) -> tuple[str, list[dict]]:
-    """单轮提问入口：自动套用售后系统提示词，要求至少一次工具调用。"""
     if not question.strip():
         raise ValueError("问题不能为空")
     messages = [
@@ -149,17 +133,22 @@ def answer_question(
 
 
 def format_trace(trace: list[dict]) -> str:
-    """把调用轨迹渲染成课堂可直接截图的文本。"""
+    """把调用轨迹渲染成课堂可直接截图的美化文本。"""
     if not trace:
-        return "（本次未发生工具调用）"
+        return "  （本次未发生工具调用）"
     lines = []
     for index, step in enumerate(trace, start=1):
         status = step.get("status", "ok")
-        lines.append(f"第{index}次调用  轮次{step.get('round', '-')}  状态：{status}")
-        lines.append(f"  模型选择工具：{step['name']}")
-        lines.append(f"  模型生成参数：{json.dumps(step['arguments'], ensure_ascii=False)}")
-        lines.append(f"  应用执行结果：{json.dumps(step['result'], ensure_ascii=False)}")
-        lines.append(f"  回填关联ID：{step['call_id']}  耗时：{step.get('elapsed_ms', '-')}ms")
+        status_icon = "✅" if status == "ok" else "❌"
+        lines.append(f"  [{status_icon} 第{index}次调用] 工具：{step['name']}（第 {step.get('round', '-')} 轮）")
+        lines.append(f"     ├─ 生成参数：{json.dumps(step['arguments'], ensure_ascii=False)}")
+        lines.append(f"     ├─ 执行状态：{status}（耗时 {step.get('elapsed_ms', '-')}ms）")
+
+        res_str = json.dumps(step['result'], ensure_ascii=False)
+        if len(res_str) > 100:
+            res_str = res_str[:100] + "... [已截断]"
+        lines.append(f"     └─ 返回结果：{res_str}")
+
         if step.get("error"):
-            lines.append(f"  校验提示：{step['error']}")
+            lines.append(f"     ⚠️ 校验提示：{step['error']}")
     return "\n".join(lines)

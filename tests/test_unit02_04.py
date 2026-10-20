@@ -250,17 +250,29 @@ class TestPromptBoundaries(unittest.TestCase):
         self.assertIn("不直接退款", SYSTEM_PROMPT)
 
     def test_overbound_question_is_rejected_by_mock(self):
+        """越权请求必须被拒答并转人工。
+
+        断言只查语义（拒绝 + 转人工 + 引用边界政策），不写死具体措辞，
+        否则每次润色客服话术都会误报为失败。
+        """
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": OVERBOUND_QUESTIONS[0]},
         ]
         answer = MockLLM().chat(messages)
-        self.assertIn("超出模型权限", answer)
-        self.assertIn("转人工", answer)
+        self.assertIn("权限", answer)
+        self.assertTrue(
+            any(word in answer for word in ("无法", "不能", "无权")),
+            f"越权回答里必须出现拒绝动作，实际是：{answer}",
+        )
+        self.assertIn("人工客服", answer)
+        self.assertIn("DOC-02-13", answer)
 
     def test_logistics_question_returns_manual_ticket_hint(self):
+        """物流异常要给出工单/转人工的出口，同样不写死措辞。"""
         answer = MockLLM().chat([{"role": "user", "content": "物流异常怎么办？"}])
-        self.assertIn("待人工确认工单", answer)
+        self.assertIn("工单", answer)
+        self.assertIn("人工", answer)
 
     def test_mock_stream_can_be_joined_as_answer(self):
         answer = "".join(MockLLM().stream([{"role": "user", "content": "订单SO-2001已签收，我能退货吗？"}]))
