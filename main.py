@@ -1,10 +1,12 @@
-"""电商售后服务智能体：单元02—05 累计入口。
+"""电商售后服务智能体：单元02—06 累计入口。
 
 单元02 流式输出与多轮对话：/chat 走纯 stream 模式，保留多轮上下文。
 单元03 Prompt工程与模板：/compare 用同一份订单数据、同一个问题对比差/好提示词。
 单元04 Function Calling：默认走工具闭环，先查工具再回答，/trace 看调用轨迹。
 单元05 工具注册与调度：所有工具统一登记在 ToolRegistry，/registry 看登记表，
 /dispatch 不访问模型直接验证调度边界，/log 看带轮次与异常的调用日志。
+单元06 Embedding与向量化：/embed 用本地中文模型把样例文本转成向量并做相似度排序，
+本单元只比较"像不像"，不做问答、不读知识库、不做业务判断。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -41,6 +43,7 @@ HELP_TEXT = """可用命令：
   /dispatch        单元05：不访问模型，直接验证调度：正常 + 未知工具 + 缺参 + 异常
   /log             单元05：最近一次调度的调用日志（轮次、状态、耗时、异常提示）
   /trace           查看最近一次工具调用的完整轨迹
+  /embed [问题]    单元06：本地中文模型向量化 + 余弦相似度排序 + 边界核对
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -227,6 +230,39 @@ def demo_missing_argument_loop(llm) -> None:
     session.ask_with_tools("订单SO-2001已签收，我想退货，需要什么条件？", show_trace=True)
 
 
+def demo_embedding(query: str | None = None) -> None:
+    """单元06 验收链：真实文本 -> 向量 -> 排序 -> 边界核对 -> 误判风险。"""
+    # 延迟导入：没装 embedding 依赖时，其余单元的命令仍然可用。
+    try:
+        from app.embedding import model_ready
+        from app.vector_lab import (
+            DEMO_QUERY,
+            RISK_EXPECTED_ROUTE,
+            RISK_QUERY,
+            boundary_report,
+            misjudge_check,
+            render_boundary,
+            render_misjudge,
+            render_report,
+            run_lab,
+        )
+    except ImportError as exc:
+        print(f"单元06 依赖未安装（{exc}）。请先执行：uv sync --extra embedding")
+        return
+
+    ready, detail = model_ready()
+    if not ready:
+        print(f"向量模型不可用：{detail}")
+        return
+
+    target = query or DEMO_QUERY
+    print(render_report(run_lab(target)))
+    print()
+    print(render_boundary(boundary_report()))
+    print()
+    print(render_misjudge(misjudge_check(RISK_QUERY, RISK_EXPECTED_ROUTE)))
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -298,6 +334,9 @@ def main() -> None:
             continue
         if command == "/missingloop":
             demo_missing_argument_loop(llm)
+            continue
+        if command == "/embed":
+            demo_embedding(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

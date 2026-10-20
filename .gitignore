@@ -4,3 +4,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .idea/
+# 单元06 的中文向量模型约 180MB，不随仓库分发；
+# 用 EMBEDDING_MODEL_DIR 指向课程材料里的 models/ 即可。
+models/
