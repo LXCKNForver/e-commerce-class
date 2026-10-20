@@ -9,6 +9,9 @@ dependencies = ["python-dotenv>=1.0.0"]
 embedding = [
     "fastembed>=0.9.0,<1.0",
 ]
+chroma = [
+    "chromadb>=1.0.0,<2.0",
+]
 
 [tool.uv]
 index-url = "https://mirrors.aliyun.com/pypi/simple"

@@ -7,3 +7,5 @@ __pycache__/
 # 单元06 的中文向量模型约 180MB，不随仓库分发；
 # 用 EMBEDDING_MODEL_DIR 指向课程材料里的 models/ 即可。
 models/
+# 单元07 建库脚本的运行产物（本地 SQLite），不是源代码。
+.chroma_unit7/

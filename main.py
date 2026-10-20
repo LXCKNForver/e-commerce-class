@@ -1,12 +1,14 @@
-"""电商售后服务智能体：单元02—06 累计入口。
+"""电商售后服务智能体：单元02—07 累计入口。
 
 单元02 流式输出与多轮对话：/chat 走纯 stream 模式，保留多轮上下文。
 单元03 Prompt工程与模板：/compare 用同一份订单数据、同一个问题对比差/好提示词。
 单元04 Function Calling：默认走工具闭环，先查工具再回答，/trace 看调用轨迹。
 单元05 工具注册与调度：所有工具统一登记在 ToolRegistry，/registry 看登记表，
 /dispatch 不访问模型直接验证调度边界，/log 看带轮次与异常的调用日志。
-单元06 Embedding与向量化：/embed 用本地中文模型把样例文本转成向量并做相似度排序，
-本单元只比较"像不像"，不做问答、不读知识库、不做业务判断。
+单元06 Embedding与向量化：/embed 用本地中文模型把售后文本转成 512 维向量并排序，
+只比较"像不像"，不做问答、不读知识库、不做业务判断。
+单元07 向量数据库选型：/vector 看记录字段与精确遍历基线，
+/chroma 建真实 Chroma 空集合并核对集合 ID；本单元不入数据，写入与查询留给单元08。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -18,8 +20,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# 不强制覆盖已有环境变量：命令行 `LLM_PROVIDER=mock` 仍能切回离线模式，
-# .env 只负责补齐未设置的项（如 DEEPSEEK_API_KEY）。
 load_dotenv(Path(__file__).with_name(".env"))
 
 from app.conversation import Conversation
@@ -44,6 +44,8 @@ HELP_TEXT = """可用命令：
   /log             单元05：最近一次调度的调用日志（轮次、状态、耗时、异常提示）
   /trace           查看最近一次工具调用的完整轨迹
   /embed [问题]    单元06：本地中文模型向量化 + 余弦相似度排序 + 边界核对
+  /vector          单元07：记录字段图 + 精确遍历检索 + 元数据过滤 + 项目隔离
+  /chroma          单元07：真实 Chroma 建空集合、只读查看、重复运行核对集合 ID
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -63,16 +65,13 @@ class AgentSession:
 
     def __init__(self, llm, registry: ToolRegistry | None = None):
         self.llm = llm
-        # 单元05：会话持有自己的注册表，模型可见清单与调用日志都从这里出。
         self.registry = registry or build_registry()
         self.chat = Conversation()
         self.dialog: list[dict] = [{"role": "system", "content": TOOL_SYSTEM_PROMPT}]
         self.last_trace: list[dict] = []
-        # 追问时用户常省略订单号，记住本会话最近一次提到的订单。
         self.last_order_id: str | None = None
 
     def resolve_context(self, question: str) -> str:
-        """把订单事实渲染进提示词：流式模式没有工具可用，这一步是它的取数入口。"""
         order_id = extract_order_id(question) or self.last_order_id
         if not order_id:
             return "（未提供订单号，无法查询模拟订单数据）"
@@ -94,9 +93,12 @@ class AgentSession:
         self.chat.add_pair(question, answer)
 
         if show_trace or trace:
-            print("--- 工具调用轨迹 ---")
+            print("\n" + "─" * 60)
+            print("🔍 [思考过程：工具调用轨迹]")
             print(format_trace(trace))
-            print("--- 最终回答 ---")
+            print("─" * 60)
+            print("💬 [最终客服回复]\n")
+
         print_streamed(answer)
         return answer
 
@@ -105,8 +107,6 @@ class AgentSession:
     def ask_stream(self, question: str) -> str:
         self.chat.add("user", question)
 
-        # 流式模式不调工具，改用模板把订单事实注入本轮用户消息；
-        # history 里仍保存原始提问，保证 /history 可读。
         context = self.resolve_context(question)
         recent = list(self.chat.history)
         recent[-1] = {
@@ -153,7 +153,6 @@ MISSING_ARGUMENT_DEMOS = [
 
 
 def demo_argument_validation() -> None:
-    """Unit04 验收：工具名与参数可校验，缺参时给出清晰错误。"""
     print("工具参数白名单与必填校验演示：")
     for call in MISSING_ARGUMENT_DEMOS:
         print(f"\n调用：{call['name']}  参数：{json.dumps(call['arguments'], ensure_ascii=False)}")
@@ -165,11 +164,9 @@ def demo_argument_validation() -> None:
 
 
 def _unstable_handler(order_id: str) -> dict:
-    """仅供演示：模拟处理函数抛出的非 ToolError 异常。"""
     raise RuntimeError("模拟数据库连接中断")
 
 
-# 单元05 调度演示：不访问模型，直接验证注册表边界。
 DISPATCH_DEMOS = [
     {"call_id": "demo-1", "name": "query_order", "arguments": {"order_id": "SO-2001"}},
     {"call_id": "demo-2", "name": "lookup_policy_doc", "arguments": {"doc_id": "DOC-02-05"}},
@@ -179,7 +176,6 @@ DISPATCH_DEMOS = [
 
 
 def demo_dispatch() -> None:
-    """单元05 验收：两个业务工具可调度；未知工具被拒绝；异常不中断其他请求。"""
     registry = build_registry()
     print(f"已注册工具（{len(registry.names())} 个）：{', '.join(registry.names())}\n")
 
@@ -190,7 +186,6 @@ def demo_dispatch() -> None:
         print(f"  状态：{step['status']}（{step['elapsed_ms']}ms）")
         print(f"  结果：{json.dumps(step['result'], ensure_ascii=False)[:220]}")
 
-    # 额外登记一个"会抛异常"的工具，验证兜底分支；它只存在于这个临时注册表里。
     unstable = build_registry()
     unstable.register(ToolSpec(
         name="unstable_demo_tool",
@@ -218,7 +213,6 @@ def demo_dispatch() -> None:
 
 
 def demo_missing_argument_loop(llm) -> None:
-    """离线演示：模型漏传参数 -> 工具报错回填 -> 模型补全后成功。"""
     if not isinstance(llm, MockLLM):
         print("当前是 DeepSeek 模式，无法人为制造漏参；已改为展示静态校验。")
         demo_argument_validation()
@@ -231,8 +225,6 @@ def demo_missing_argument_loop(llm) -> None:
 
 
 def demo_embedding(query: str | None = None) -> None:
-    """单元06 验收链：真实文本 -> 向量 -> 排序 -> 边界核对 -> 误判风险。"""
-    # 延迟导入：没装 embedding 依赖时，其余单元的命令仍然可用。
     try:
         from app.embedding import model_ready
         from app.vector_lab import (
@@ -261,6 +253,90 @@ def demo_embedding(query: str | None = None) -> None:
     print(render_boundary(boundary_report()))
     print()
     print(render_misjudge(misjudge_check(RISK_QUERY, RISK_EXPECTED_ROUTE)))
+
+
+# ---------------------------------------------------------------- 单元07：向量数据库
+
+
+def demo_vector_store() -> None:
+    """单元07：先看清"记录长什么样"和精确遍历基线，再谈索引。"""
+    try:
+        from app.vector_store import (
+            DEMO_QUERY,
+            TENANT_ID,
+            InMemoryVectorStore,
+            build_demo_records,
+            render_field_diagram,
+        )
+    except ImportError as exc:
+        print(f"单元07 依赖未安装（{exc}）。请先执行：uv sync --extra embedding")
+        return
+
+    print(render_field_diagram())
+    print()
+
+    store = InMemoryVectorStore("after_sale_knowledge_base_demo")
+    items = build_demo_records()
+    store.add_many(items)
+    print(
+        f"已写入 {store.count()} 条记录"
+        f"（知识文档 {store.count(doc_type='knowledge')} 条、"
+        f"样例问题 {store.count(doc_type='question')} 条），"
+        f"每条 {store.dimension} 维。"
+    )
+    print(f"样例记录：{store.records[0].document_id} -> {store.records[0].text[:40]}…")
+    print()
+
+    print(f"精确遍历检索：{DEMO_QUERY}")
+    for hit in store.query(DEMO_QUERY, TENANT_ID, top_k=3):
+        print(
+            f"  {hit.score:.4f}  {hit.record.document_id}  "
+            f"类型={hit.record.doc_type}  {hit.record.text[:40]}"
+        )
+
+    print(f"\n元数据过滤 doc_type=knowledge：只剩 {store.count(doc_type='knowledge')} 条")
+    for hit in store.query(DEMO_QUERY, TENANT_ID, top_k=2, doc_type="knowledge"):
+        print(f"  {hit.score:.4f}  {hit.record.document_id}")
+
+    print(f"项目隔离查询（换成别的项目）：{len(store.query(DEMO_QUERY, 'other-project'))} 条")
+    print("重复 document_id 会被拒绝：", end="")
+    try:
+        store.add(
+            items[0]["document_id"],
+            items[0]["text"],
+            items[0]["source"],
+            items[0]["doc_type"],
+            TENANT_ID,
+        )
+    except ValueError as exc:
+        print(exc)
+    print("注意：以上是全量遍历的精确检索，没有索引；数据量一大就要靠 HNSW/IVF 换速度。")
+
+
+def demo_chroma() -> None:
+    """单元07：真实 Chroma 建空集合 + 只读查看 + 重复运行核对集合 ID。"""
+    try:
+        from inspect_chroma import inspect_collection
+        from setup_chroma import CHROMA_PATH, create_first_collection
+    except ImportError as exc:
+        print(f"单元07 依赖未安装（{exc}）。请先执行：uv sync --extra chroma")
+        return
+
+    print("第一次建库：")
+    _, first = create_first_collection()
+    print(f"  集合名称={first.name}  集合ID={first.id}  记录数={first.count()}")
+
+    print("重复运行（集合 ID 应保持不变）：")
+    _, second = create_first_collection()
+    print(f"  集合名称={second.name}  集合ID={second.id}  记录数={second.count()}")
+    print(f"  两次集合 ID 一致：{first.id == second.id}")
+
+    info = inspect_collection()
+    print("\n只读查看：")
+    print(f"  Chroma 版本：{info['chroma_version']}")
+    print(f"  持久化目录：{CHROMA_PATH}")
+    print(f"  集合元数据：{info['metadata']}")
+    print(f"  当前记录数：{info['count']}（本单元只建空集合，第八单元再写入）")
 
 
 def run_demo(session: AgentSession) -> None:
@@ -338,6 +414,12 @@ def main() -> None:
         if command == "/embed":
             demo_embedding(payload or None)
             continue
+        if command == "/vector":
+            demo_vector_store()
+            continue
+        if command == "/chroma":
+            demo_chroma()
+            continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]
             print(f"对比问题：{target}")
@@ -362,8 +444,7 @@ def main() -> None:
             session.ask_with_tools(question)
         except (ToolError, RuntimeError, ValueError) as exc:
             print(f"助手：本次处理失败（{exc}）。请补充订单号后重试，或转人工客服。")
-        except Exception as exc:  # noqa: BLE001 - 交互入口的最后一道兜底
-            # 单元05 要求：任何工具或模型异常都不能让主程序退出，会话要继续可用。
+        except Exception as exc:
             print(f"助手：本次处理出现未预期异常（{type(exc).__name__}: {exc}）。")
             print("      会话已保留，请稍后重试或转人工客服。")
 
