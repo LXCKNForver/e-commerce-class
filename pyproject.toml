@@ -6,12 +6,9 @@ requires-python = ">=3.11,<3.13"
 dependencies = ["python-dotenv>=1.0.0"]
 
 [project.optional-dependencies]
-embedding = [
-    "fastembed>=0.9.0,<1.0",
-]
-chroma = [
-    "chromadb>=1.0.0,<2.0",
-]
+deepseek = ["openai>=1.0.0"]
+embedding = ["fastembed>=0.9.0,<1.0"]
+chroma = ["chromadb>=0.4.0"]
 
 [tool.uv]
 index-url = "https://mirrors.aliyun.com/pypi/simple"
