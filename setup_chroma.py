@@ -17,15 +17,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # 运行后生成的数据库文件属于本单元，不进 Git，也不移动课程已有数据目录。
 CHROMA_PATH = PROJECT_ROOT / ".chroma_unit7"
-COLLECTION_NAME = "after_sale_knowledge_base"
-# 与 app/embedding.py 保持一致；集合元数据里写清楚，便于以后核对。
-COLLECTION_METADATA = {
-    "purpose": "ecommerce_after_sale_knowledge_base",
-    "embedding_model": "BAAI/bge-small-zh-v1.5",
-    "dimension": 512,
-    "content_source": "模拟数据/knowledge/ + 模拟数据/sample_questions.json",
-    "write_policy": "read_only_sample_data",
-}
+# 集合名称与元数据以 app/chroma_store.py 为唯一来源：单元08 写入时沿用同一个集合定义。
+from app.chroma_store import COLLECTION_METADATA, COLLECTION_NAME  # noqa: E402
 
 
 def create_first_collection(database_path: Path = CHROMA_PATH):

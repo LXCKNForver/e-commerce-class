@@ -1,4 +1,4 @@
-"""电商售后服务智能体：单元02—07 累计入口。
+"""电商售后服务智能体：单元02—08 累计入口。
 
 单元02 流式输出与多轮对话：/chat 走纯 stream 模式，保留多轮上下文。
 单元03 Prompt工程与模板：/compare 用同一份订单数据、同一个问题对比差/好提示词。
@@ -9,6 +9,8 @@
 只比较"像不像"，不做问答、不读知识库、不做业务判断。
 单元07 向量数据库选型：/vector 看记录字段与精确遍历基线，
 /chroma 建真实 Chroma 空集合并核对集合 ID；本单元不入数据，写入与查询留给单元08。
+单元08 Chroma 写入与查询：/ingest 把 模拟数据/knowledge/ 里的售后资料批量写入集合，
+重新连接后核对记录数并做项目内 Top3 检索；本单元同样不生成业务答案。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -46,6 +48,7 @@ HELP_TEXT = """可用命令：
   /embed [问题]    单元06：本地中文模型向量化 + 余弦相似度排序 + 边界核对
   /vector          单元07：记录字段图 + 精确遍历检索 + 元数据过滤 + 项目隔离
   /chroma          单元07：真实 Chroma 建空集合、只读查看、重复运行核对集合 ID
+  /ingest          单元08：批量写入本组售后资料 + 重新连接 + 项目内 Top3 检索
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -339,6 +342,56 @@ def demo_chroma() -> None:
     print(f"  当前记录数：{info['count']}（本单元只建空集合，第八单元再写入）")
 
 
+# ---------------------------------------------------------------- 单元08：写入与查询
+
+
+def demo_chroma_write() -> None:
+    """单元08：批量写入本组真实资料，再重新连接做一次项目内检索。"""
+    try:
+        from app.chroma_store import (
+            DEMO_QUESTION,
+            PROJECT_ID,
+            ChromaVectorStore,
+            render_record_fields,
+        )
+        from app.ingest import load_markdown, render_inventory
+    except ImportError as exc:
+        print(
+            f"单元08 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma"
+        )
+        return
+
+    # 第1课：先看清楚要喂进去的是什么资料。此时还没碰数据库。
+    records = load_markdown()
+    print(render_inventory(records))
+    print()
+    print(render_record_fields())
+    print()
+
+    # 第2课：连接库、记下导入前数量、批量写入。
+    store = ChromaVectorStore()
+    print(f"持久化目录：{store.database_path}")
+    print(f"集合：{store.collection.name}  集合 ID：{store.collection.id}")
+    print(f"导入前记录数：{store.count()}")
+    store.upsert_documents(records)
+    print(f"导入后记录数：{store.count()}")
+
+    # 第4课：重新连接磁盘上的库，确认记录还在、集合还是同一个。
+    reopened = ChromaVectorStore()
+    print(f"重新连接后集合 ID：{reopened.collection.id}"
+          f"（与首次一致：{reopened.collection.id == store.collection.id}）")
+    print(f"重新连接后记录数：{reopened.count()}")
+
+    print(f"\n检索问题：{DEMO_QUESTION}（项目：{PROJECT_ID}）")
+    for rank, hit in enumerate(reopened.query(DEMO_QUESTION, PROJECT_ID), start=1):
+        print(f"{rank}. 距离={hit['distance']:.4f}  余弦={hit['similarity']:.4f}")
+        print(f"   来源={hit['source']}")
+        print(f"   ID={hit['id']}")
+    print("距离越小越接近、余弦越大越接近；两者都不是正确率。")
+    print("本单元只做检索，不生成业务答案；重复运行时稳定 ID 会让记录数保持不变。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -419,6 +472,9 @@ def main() -> None:
             continue
         if command == "/chroma":
             demo_chroma()
+            continue
+        if command == "/ingest":
+            demo_chroma_write()
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]
