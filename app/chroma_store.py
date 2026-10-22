@@ -34,6 +34,9 @@ DEFAULT_DB_PATH = PROJECT_ROOT / ".chroma_unit8"
 # 单元09 的检索服务再单独用一个库：任务卡要求"数据库保存在本单元代码目录，
 # 不复制第八单元数据库"，所以这里不指向 .chroma_unit8/。
 DEFAULT_UNIT9_DB_PATH = PROJECT_ROOT / ".chroma_unit9"
+# 单元10 的 RAG 问答再用一个独立库：任务卡要求"数据库留在本单元目录"，
+# 三个单元的库目录互不干扰，各自保住自己的复现现场。
+DEFAULT_UNIT10_DB_PATH = PROJECT_ROOT / ".chroma_unit10"
 
 # 项目隔离标识沿用单元07；查询必须带上它，否则会拿到别的项目的数据。
 PROJECT_ID = "e-commerce-after-sales"
@@ -60,6 +63,12 @@ def resolve_unit9_db_path() -> Path:
     """单元09 的数据库目录：默认 `.chroma_unit9/`，可用 CHROMA_UNIT9_DB_DIR 覆盖。"""
     override = os.environ.get("CHROMA_UNIT9_DB_DIR", "").strip()
     return Path(override) if override else DEFAULT_UNIT9_DB_PATH
+
+
+def resolve_unit10_db_path() -> Path:
+    """单元10 的数据库目录：默认 `.chroma_unit10/`，可用 CHROMA_UNIT10_DB_DIR 覆盖。"""
+    override = os.environ.get("CHROMA_UNIT10_DB_DIR", "").strip()
+    return Path(override) if override else DEFAULT_UNIT10_DB_PATH
 
 
 def render_record_fields() -> str:

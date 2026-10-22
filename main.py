@@ -1,4 +1,4 @@
-"""电商售后服务智能体：单元02—09 累计入口。
+"""电商售后服务智能体：单元02—10 累计入口。
 
 单元02 流式输出与多轮对话：/chat 走纯 stream 模式，保留多轮上下文。
 单元03 Prompt工程与模板：/compare 用同一份订单数据、同一个问题对比差/好提示词。
@@ -13,6 +13,9 @@
 重新连接后核对记录数并做项目内 Top3 检索；本单元同样不生成业务答案。
 单元09 向量检索服务：/retrieve 用独立库 .chroma_unit9/ 把查询封装成 search/search_many，
 支持 Top-K、来源过滤与项目隔离，只返回证据不生成回答。
+单元10 RAG问答：/rag 用独立库 .chroma_unit10/ 复用单元09 的检索服务，
+无证据时直接拒答且不调用模型，命中时编好带编号的证据上下文再交给真实 DeepSeek，
+最后核验引用编号是否合法、来源是否真实存在。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -52,6 +55,7 @@ HELP_TEXT = """可用命令：
   /chroma          单元07：真实 Chroma 建空集合、只读查看、重复运行核对集合 ID
   /ingest          单元08：批量写入本组售后资料 + 重新连接 + 项目内 Top3 检索
   /retrieve        单元09：检索服务——Top-3/Top-5、来源过滤、项目隔离、批量查询
+  /rag [问题]      单元10：RAG 问答——拒答分支、编号上下文、真实模型生成、引用核验
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -470,6 +474,74 @@ def demo_retrieval() -> None:
     print("距离越小越接近；本单元只返回证据，不生成回答（生成留给后续单元）。")
 
 
+# ---------------------------------------------------------------- 单元10：RAG 问答
+
+
+def demo_rag(question: str | None = None) -> None:
+    """单元10：检索 → 无证据拒答 → 编号上下文 → 真实生成 → 引用核验。"""
+    try:
+        from app.chroma_store import PROJECT_ID, ChromaVectorStore, resolve_unit10_db_path
+        from app.ingest import load_markdown
+        from app.rag import (
+            DEMO_QUESTION,
+            EMPTY_PROJECT,
+            NO_EVIDENCE_ANSWER,
+            RAGService,
+            RecordingLLM,
+            build_context_preview,
+            render_result,
+        )
+        from app.retriever import RetrievalService
+    except ImportError as exc:
+        print(
+            f"单元10 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma"
+        )
+        return
+
+    # 第1课：本单元独立库，与其他单元的库互不干扰。
+    records = load_markdown()
+    database_path = resolve_unit10_db_path()
+    store = ChromaVectorStore(database_path)
+    before = store.count()
+    store.upsert_documents(records)
+    print(f"数据库目录：{database_path}")
+    print(f"导入前/后：{before} / {store.count()} 条；项目：{PROJECT_ID}")
+    print(f"集合：{store.collection.name}  集合 ID：{store.collection.id}")
+
+    llm = RecordingLLM(build_llm())
+    rag = RAGService(RetrievalService(store), llm)
+    target = question or DEMO_QUESTION
+
+    # 第2课：跨项目必然没有证据，这时必须拒答，且一次模型都不调用。
+    print()
+    print(f"未命中示例（项目：{EMPTY_PROJECT}）：")
+    miss = rag.answer(target, EMPTY_PROJECT)
+    print(f"  回答：{miss.answer}")
+    print(f"  命中 {len(miss.hits)} 条；是否等于拒答话术：{miss.answer == NO_EVIDENCE_ANSWER}")
+    print(f"  模型累计调用次数：{llm.call_count}（应为 0）")
+
+    # 第3课：正常问答前先看编号上下文长什么样，这是模型唯一能引用的范围。
+    hits = rag.retrieve(target, PROJECT_ID, rag.top_k)
+    print()
+    print("编号上下文（第③步，模型只能在这些编号里引用）：")
+    print(build_context_preview(rag, hits))
+
+    # 第4课：真实模型生成 + 引用核验。
+    if type(llm.inner).__name__ == "MockLLM":
+        print()
+        print("提示：当前是离线 mock 模式，MockLLM 的回答不带 [n] 引用编号，")
+        print("     所以下面这条必然被第⑤步判为不可核验。这是编排规则在生效，不是 bug；")
+        print("     想看真实 DeepSeek 的回答，在 .env 里把 LLM_PROVIDER 改成 deepseek。")
+    print()
+    result = rag.answer(target, PROJECT_ID)
+    print(render_result(result))
+    print()
+    print(f"模型累计调用次数：{llm.call_count}")
+    print("引用核验只能证明编号存在且合法，不能证明每句话都忠于原文；")
+    print("越界编号会被判为不可核验，宁可不给来源也不放行。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -556,6 +628,9 @@ def main() -> None:
             continue
         if command == "/retrieve":
             demo_retrieval()
+            continue
+        if command == "/rag":
+            demo_rag(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

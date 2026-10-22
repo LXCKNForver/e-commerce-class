@@ -13,3 +13,5 @@ models/
 .chroma_unit8/
 # 单元09 检索服务的运行产物（本地 SQLite），不是源代码。
 .chroma_unit9/
+# 单元10 RAG 问答的运行产物（本地 SQLite），不是源代码。
+.chroma_unit10/
