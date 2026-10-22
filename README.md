@@ -1,6 +1,6 @@
 # 电商售后服务智能体
 
-李省春小组的 Python 课堂项目。在老师发放的“项目起始模板”代码骨架之上，已按电商任务卡实现第 02—08 单元：多轮对话与流式输出、Prompt 模板与同题对比、订单工具调用闭环、工具注册表与调度器、售后文本向量化与相似度排序、向量库选型与 Chroma 空集合建库、售后资料批量写入与项目内检索。所有数据均为课程虚构样例，只读，不接真实电商系统。
+李省春小组的 Python 课堂项目。在老师发放的“项目起始模板”代码骨架之上，已按电商任务卡实现第 02—09 单元：多轮对话与流式输出、Prompt 模板与同题对比、订单工具调用闭环、工具注册表与调度器、售后文本向量化与相似度排序、向量库选型与 Chroma 空集合建库、售后资料批量写入与项目内检索、可复用检索服务（Top-K／来源过滤／批量）。所有数据均为课程虚构样例，只读，不接真实电商系统。
 
 ## 在 Trae 中打开
 
@@ -18,9 +18,10 @@ uv run python 验证数据.py
 uv run python scripts/generate_evidence_unit06.py
 uv run python scripts/generate_evidence_unit07.py
 uv run python scripts/generate_evidence_unit08.py
+uv run python scripts/generate_evidence_unit09.py
 ```
 
-`--extra embedding`（单元06 向量模型）与 `--extra chroma`（单元07、08 向量库）都是可选依赖。只跑单元 02—05 时 `uv sync` 即可，其余命令不受影响。
+`--extra embedding`（单元06 向量模型）与 `--extra chroma`（单元07—09 向量库）都是可选依赖。只跑单元 02—05 时 `uv sync` 即可，其余命令不受影响。
 
 单元06 的中文向量模型约 180MB，放在 `models/`，已用 `.gitignore` 排除、不随仓库分发；换电脑时在 `.env` 里设置 `EMBEDDING_MODEL_DIR` 指向课程材料的 `models/` 目录即可，仍保持离线加载、不联网下载。
 
@@ -34,7 +35,9 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元08 沿用同一个集合定义（同名、同元数据、同向量模型），但把库文件写到 `.chroma_unit8/`，以保住单元07「0 条记录」的验收现场；想直接写进单元07 那个库时，在 `.env` 里设 `CHROMA_DB_DIR=.chroma_unit7`。写入命令是交互式的 `/ingest`（见下），流程为：读 15 篇资料 → 记录导入前数量 → 批量 upsert → 重新连接核对记录数与集合 ID → 项目内 Top 3 检索。重复运行时稳定 ID（`项目标识:DOC-02-05`）让写入变成更新，记录数不会增长。
 
-默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`、`.chroma_unit8/` 不会提交到 GitHub。
+单元09 的检索服务再用一个独立库 `.chroma_unit9/`——任务卡要求「数据库保存在本单元代码目录，不复制第八单元数据库」，所以三个单元的库目录互不干扰；需要改路径时用 `CHROMA_DB_DIR`（单元08）与 `CHROMA_UNIT9_DB_DIR`（单元09）。查询命令是 `/retrieve`：Top-3/Top-5、来源过滤、跨项目返回 0 条、两个问题的批量检索，以及一次空问题报错，全部一条命令跑完。
+
+默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`、`.chroma_unit8/`、`.chroma_unit9/` 不会提交到 GitHub。
 
 ## 交互命令
 
@@ -53,6 +56,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 /vector          单元07：记录字段图 + 精确遍历检索 + 元数据过滤 + 项目隔离
 /chroma          单元07：真实 Chroma 建空集合 + 只读查看 + 重复运行核对集合 ID
 /ingest          单元08：本组资料批量写入 + 重新连接核对 + 项目内 Top 3 检索
+/retrieve        单元09：检索服务 Top-3/Top-5 + 来源过滤 + 项目隔离 + 批量查询
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -62,6 +66,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 `/vector` 把 15 份售后知识文档 + 6 条样例问题共 21 条写入内存集合，展示记录字段图、精确遍历 Top-K、按 `doc_type` 过滤与 `tenant_id` 项目隔离。它是**全量遍历的精确基线**，后面量 Recall@K 时拿它当标准答案；不是真正的向量数据库。
 
 `/ingest` 走真实 Chroma：把 `模拟数据/knowledge/` 的 15 篇售后文档用单元06 同一个模型转成 512 维向量后批量 upsert，重新连接核对记录数与集合 ID，再按 `project_id` 过滤做 Top 3 检索（同时给出 l2 距离与余弦相似度）。它**只做检索，不生成业务答案**——距离/相似度说明的是"像不像"，不是正确答案。
+
+`/retrieve` 是单元09 的检索服务入口：`RetrievalService.search()` 与 `search_many()` 返回统一的 `SearchResult`（原文、来源、项目标识、资料类型、距离、余弦），单条接口直接委托批量接口，两个入口的排序与过滤规则只有一份实现。`project_id` 是必选过滤条件、留空直接报错；`source` 为可选的精确过滤。**命中不足 K 条时实际返回条数会少于 K**，这是过滤生效的正常表现。
 
 ## 工程内容
 
@@ -80,13 +86,15 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/vector_store.py`：单元07 记录字段图与精确检索基线（`VectorRecord` / `InMemoryVectorStore`）。
 - `setup_chroma.py` / `inspect_chroma.py`：单元07 真实 Chroma 建空集合与只读查看。
 - `app/ingest.py`：单元08 资料准备，稳定 ID、来源与项目标识。
-- `app/chroma_store.py`：单元08 真实写入与检索，集合定义以这里为唯一来源。
-- `tests/`：单元01—08 单元测试，129 项（单元06 需 `embedding`、单元07/08 需 `chroma`）。
+- `app/chroma_store.py`：单元08 真实写入与检索（`query_many` 批量查询），集合定义以这里为唯一来源。
+- `app/retriever.py`：单元09 检索服务（`SearchResult` / `RetrievalService` / `render_results`）。
+- `tests/`：单元01—09 单元测试，150 项（单元06 需 `embedding`、单元07—09 需 `chroma`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
 - `docs/单元07选型决策卡.md`：向量库选型决策卡（数据规模、元数据字段、选型依据与重评条件）。
 - `docs/单元08验收证据.md`：单元08 的真实运行记录（全新库首次导入 + 真实库重复运行两次，脚本抓取）。
+- `docs/单元09验收证据.md`：单元09 的真实运行记录（Top-3/Top-5、来源过滤、跨项目空、批量、边界，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
@@ -105,8 +113,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 ## 小组任务与日报
 
-从 [项目管理/README.md](项目管理/README.md) 查看第 01—08 单元的五人分工、提交清单、验收标准和每日记录。任务安排与实际完成情况分开记录；完成后在对应日期的日报中填写本人结果和证据链接，由组长审核。
+从 [项目管理/README.md](项目管理/README.md) 查看第 01—09 单元的五人分工、提交清单、验收标准和每日记录。任务安排与实际完成情况分开记录；完成后在对应日期的日报中填写本人结果和证据链接，由组长审核。
 
 ## 来源
 
-代码取自 `unit1.zip/项目起始模板`；电商资料取自 `unit1.zip/自选项目任务包/02-电商售后服务智能体`。`unit5.zip` 的工单与报销课堂示例属于另一个演示场景，未并入本工程。`unit6`、`unit7`、`unit8` 的做法已按电商售后语料改造后并入（语料换成 `模拟数据/sample_questions.json` 与 `模拟数据/knowledge/`，参考实现里的工单／报销语料一律不用，集合名、元数据与项目标识也一并改造）。
+代码取自 `unit1.zip/项目起始模板`；电商资料取自 `unit1.zip/自选项目任务包/02-电商售后服务智能体`。`unit5.zip` 的工单与报销课堂示例属于另一个演示场景，未并入本工程。`unit6`、`unit7`、`unit8`、`unit9` 的做法已按电商售后语料改造后并入（语料换成 `模拟数据/sample_questions.json` 与 `模拟数据/knowledge/`，参考实现里的工单／报销语料一律不用，集合名、元数据、项目标识与检索问题也一并改造）。

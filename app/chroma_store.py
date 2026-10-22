@@ -31,6 +31,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # 单元07 的 .chroma_unit7/ 保持 0 条记录的验收现场，本单元写到自己的目录；
 # 想直接沿用单元07 那个库文件时，设 CHROMA_DB_DIR=.chroma_unit7 即可。
 DEFAULT_DB_PATH = PROJECT_ROOT / ".chroma_unit8"
+# 单元09 的检索服务再单独用一个库：任务卡要求"数据库保存在本单元代码目录，
+# 不复制第八单元数据库"，所以这里不指向 .chroma_unit8/。
+DEFAULT_UNIT9_DB_PATH = PROJECT_ROOT / ".chroma_unit9"
 
 # 项目隔离标识沿用单元07；查询必须带上它，否则会拿到别的项目的数据。
 PROJECT_ID = "e-commerce-after-sales"
@@ -48,9 +51,15 @@ RECORD_FIELDS = [
 
 
 def resolve_db_path() -> Path:
-    """数据库目录：默认 `.chroma_unit8/`，可用 CHROMA_DB_DIR 覆盖。"""
+    """单元08 的数据库目录：默认 `.chroma_unit8/`，可用 CHROMA_DB_DIR 覆盖。"""
     override = os.environ.get("CHROMA_DB_DIR", "").strip()
     return Path(override) if override else DEFAULT_DB_PATH
+
+
+def resolve_unit9_db_path() -> Path:
+    """单元09 的数据库目录：默认 `.chroma_unit9/`，可用 CHROMA_UNIT9_DB_DIR 覆盖。"""
+    override = os.environ.get("CHROMA_UNIT9_DB_DIR", "").strip()
+    return Path(override) if override else DEFAULT_UNIT9_DB_PATH
 
 
 def render_record_fields() -> str:
@@ -122,54 +131,87 @@ class ChromaVectorStore:
         project_id: str = PROJECT_ID,
         top_k: int = 3,
         doc_type: str | None = None,
+        source: str | None = None,
     ) -> list[dict]:
-        """用同一模型把问题变成向量，只在指定项目的记录里找最接近的 top_k 条。"""
-        from app.embedding import cosine_similarity, embed
+        """单问题检索；委托批量接口，保证两种入口的排序与过滤规则完全一致。"""
+        return self.query_many([question], project_id, top_k, doc_type, source)[0]
 
-        if not isinstance(question, str) or not question.strip():
-            raise ValueError("查询问题不能为空")
+    def query_many(
+        self,
+        questions: list[str],
+        project_id: str = PROJECT_ID,
+        top_k: int = 3,
+        doc_type: str | None = None,
+        source: str | None = None,
+    ) -> list[list[dict]]:
+        """一次查多个问题；外层列表按输入问题顺序排列，内层按距离由小到大。
+
+        project_id 是必选过滤条件，source / doc_type 是可选的精确过滤。
+        过滤后命中不足 top_k 条时，实际返回条数就会少于 K。
+        """
+        from app.embedding import cosine_similarity, embed_many
+
+        if not isinstance(questions, (list, tuple)) or not questions:
+            raise ValueError("问题列表不能为空")
+        for question in questions:
+            if not isinstance(question, str) or not question.strip():
+                raise ValueError("每个问题都必须有内容，不能是空字符串")
         if not isinstance(project_id, str) or not project_id.strip():
             raise ValueError("查询必须指定 project_id，避免跨项目返回记录")
         if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
             raise ValueError("top_k 必须是正整数")
         if doc_type is not None and (not isinstance(doc_type, str) or not doc_type.strip()):
             raise ValueError("doc_type 过滤条件不能为空字符串")
+        if source is not None and (not isinstance(source, str) or not source.strip()):
+            raise ValueError("source 过滤条件不能为空字符串")
         if self.count() == 0:
-            return []
+            return [[] for _ in questions]
 
+        # 过滤条件在 Chroma 端执行：先限定项目，再叠加来源或类型。
         where: dict = {"project_id": project_id}
+        extra_filters: list[dict] = []
         if doc_type:
-            where = {"$and": [{"project_id": project_id}, {"doc_type": doc_type}]}
+            extra_filters.append({"doc_type": doc_type})
+        if source:
+            extra_filters.append({"source": source})
+        if extra_filters:
+            where = {"$and": [{"project_id": project_id}, *extra_filters]}
 
         # 问题也用单元06 同一个模型编码——这就是"同模型查询"的含义。
-        query_vector = embed(question)
+        query_vectors = [list(vector) for vector in embed_many(list(questions))]
         # 距离由 Chroma 在库内按集合的距离指标算好返回，这里不再自己写距离公式。
         # 集合新建时未指定指标，沿用 Chroma 默认的 l2（平方欧氏距离），越小越接近。
         result = self.collection.query(
-            query_embeddings=[query_vector],
+            query_embeddings=query_vectors,
             where=where,
             # 请求条数不能超过库里已有的条数，否则 Chroma 会直接报错。
             n_results=min(top_k, self.count()),
             include=["documents", "metadatas", "distances", "embeddings"],
         )
 
-        hits: list[dict] = []
-        for document_id, text, metadata, distance, vector in zip(
-            result["ids"][0],
-            result["documents"][0],
-            result["metadatas"][0],
-            result["distances"][0],
-            result["embeddings"][0],
-        ):
-            hits.append(
-                {
+        batches: list[list[dict]] = []
+        for index, ids in enumerate(result["ids"]):
+            texts = result["documents"][index] if result.get("documents") else []
+            metadatas = result["metadatas"][index] if result.get("metadatas") else []
+            distances = result["distances"][index] if result.get("distances") else []
+            vectors = result["embeddings"][index] if result.get("embeddings") else []
+
+            batch: list[dict] = []
+            for position, document_id in enumerate(ids):
+                metadata = metadatas[position] if position < len(metadatas) else {}
+                hit = {
                     "id": document_id,
-                    "text": text,
+                    "text": texts[position] if position < len(texts) else "",
                     "source": (metadata or {}).get("source", ""),
                     "doc_type": (metadata or {}).get("doc_type", ""),
-                    "distance": float(distance),
-                    # 单元06 的余弦相似度一并给出，方便和距离对照着看。
-                    "similarity": cosine_similarity(query_vector, list(vector)),
+                    "project_id": (metadata or {}).get("project_id", project_id),
+                    "distance": float(distances[position]),
                 }
-            )
-        return hits
+                if position < len(vectors) and vectors[position] is not None:
+                    # 单元06 的余弦相似度一并给出，方便和距离对照着看。
+                    hit["similarity"] = cosine_similarity(
+                        query_vectors[index], list(vectors[position])
+                    )
+                batch.append(hit)
+            batches.append(batch)
+        return batches

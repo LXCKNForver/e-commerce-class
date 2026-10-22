@@ -11,3 +11,5 @@ models/
 .chroma_unit7/
 # 单元08 写入脚本的运行产物（本地 SQLite），不是源代码。
 .chroma_unit8/
+# 单元09 检索服务的运行产物（本地 SQLite），不是源代码。
+.chroma_unit9/

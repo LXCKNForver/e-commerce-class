@@ -1,4 +1,4 @@
-"""电商售后服务智能体：单元02—08 累计入口。
+"""电商售后服务智能体：单元02—09 累计入口。
 
 单元02 流式输出与多轮对话：/chat 走纯 stream 模式，保留多轮上下文。
 单元03 Prompt工程与模板：/compare 用同一份订单数据、同一个问题对比差/好提示词。
@@ -11,6 +11,8 @@
 /chroma 建真实 Chroma 空集合并核对集合 ID；本单元不入数据，写入与查询留给单元08。
 单元08 Chroma 写入与查询：/ingest 把 模拟数据/knowledge/ 里的售后资料批量写入集合，
 重新连接后核对记录数并做项目内 Top3 检索；本单元同样不生成业务答案。
+单元09 向量检索服务：/retrieve 用独立库 .chroma_unit9/ 把查询封装成 search/search_many，
+支持 Top-K、来源过滤与项目隔离，只返回证据不生成回答。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -49,6 +51,7 @@ HELP_TEXT = """可用命令：
   /vector          单元07：记录字段图 + 精确遍历检索 + 元数据过滤 + 项目隔离
   /chroma          单元07：真实 Chroma 建空集合、只读查看、重复运行核对集合 ID
   /ingest          单元08：批量写入本组售后资料 + 重新连接 + 项目内 Top3 检索
+  /retrieve        单元09：检索服务——Top-3/Top-5、来源过滤、项目隔离、批量查询
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -392,6 +395,81 @@ def demo_chroma_write() -> None:
     print("本单元只做检索，不生成业务答案；重复运行时稳定 ID 会让记录数保持不变。")
 
 
+# ---------------------------------------------------------------- 单元09：检索服务
+
+
+def demo_retrieval() -> None:
+    """单元09：把查询封装成服务——Top-K、来源过滤、项目隔离、批量、空问题。"""
+    try:
+        from app.chroma_store import PROJECT_ID, ChromaVectorStore, resolve_unit9_db_path
+        from app.ingest import load_markdown
+        from app.retriever import (
+            DEMO_QUESTION,
+            DEMO_SOURCE,
+            SECOND_QUESTION,
+            RetrievalService,
+            render_results,
+        )
+    except ImportError as exc:
+        print(
+            f"单元09 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma"
+        )
+        return
+
+    # 课前准备：单元09 用自己的库，不复制单元08 的数据库。
+    records = load_markdown()
+    database_path = resolve_unit9_db_path()
+    store = ChromaVectorStore(database_path)
+    before = store.count()
+    store.upsert_documents(records)
+    print(f"数据库目录：{database_path}")
+    print(f"导入前/后：{before} / {store.count()} 条；项目：{PROJECT_ID}")
+    print(f"集合：{store.collection.name}  集合 ID：{store.collection.id}")
+
+    service = RetrievalService(store)
+    # 一：同一问题改 K。Top-K 只控制返回条数，不改动入库数据。
+    print()
+    print(render_results("Top-3", service.search(DEMO_QUESTION, PROJECT_ID, top_k=3)))
+    print()
+    print(render_results("Top-5", service.search(DEMO_QUESTION, PROJECT_ID, top_k=5)))
+
+    # 二：来源过滤在 Chroma 端执行，只允许返回指定的那一份资料。
+    print()
+    print(
+        render_results(
+            f"来源过滤（只允许 {DEMO_SOURCE}）",
+            service.search(DEMO_QUESTION, PROJECT_ID, top_k=3, source=DEMO_SOURCE),
+        )
+    )
+
+    # 三：项目不匹配时应为空，证明不会跨项目返回资料。
+    print()
+    print(
+        render_results(
+            "其他项目（another_project）",
+            service.search(DEMO_QUESTION, "another_project", top_k=3),
+        )
+    )
+
+    # 四：一次调用查多个问题，输出顺序与输入问题顺序相同。
+    print()
+    for question, results in zip(
+        [DEMO_QUESTION, SECOND_QUESTION],
+        service.search_many([DEMO_QUESTION, SECOND_QUESTION], PROJECT_ID, top_k=2),
+    ):
+        print(render_results(f"批量检索 {question}", results))
+        print()
+
+    # 五：空问题是边界，必须给出明确提示而不是静默返回空。
+    try:
+        service.search("   ", PROJECT_ID)
+    except ValueError as exc:
+        print(f"空问题错误提示：ValueError: {exc}")
+
+    print("距离越小越接近；本单元只返回证据，不生成回答（生成留给后续单元）。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -475,6 +553,9 @@ def main() -> None:
             continue
         if command == "/ingest":
             demo_chroma_write()
+            continue
+        if command == "/retrieve":
+            demo_retrieval()
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]
