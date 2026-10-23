@@ -43,6 +43,18 @@ DEFAULT_UNIT11_DB_PATH = PROJECT_ROOT / ".chroma_unit11"
 # 同一库里有两种切分策略，必须分开存；混在一个集合里，命中来源就说不清了。
 UNIT11_WHOLE_COLLECTION = "after_sale_whole_docs"
 UNIT11_CHUNK_COLLECTION = "after_sale_chunks"
+# 单元12 再用一个独立库：它装的是"另一批资料"（课程两个项目组的多格式资料），
+# 与单元08/09/10 的 15 篇知识库资料不是一回事，混在一起就说不清 7 条是哪 7 条。
+DEFAULT_UNIT12_DB_PATH = PROJECT_ROOT / ".chroma_unit12"
+# 两个项目组的资料写进同一个集合，靠 project_id 区分——隔离是查询时做的，不是分库做的。
+UNIT12_COLLECTION = "after_sale_parsed_materials"
+UNIT12_COLLECTION_METADATA = {
+    "purpose": "unit12_multi_format_materials",
+    "embedding_model": "BAAI/bge-small-zh-v1.5",
+    "dimension": 512,
+    "content_source": "模拟数据/单元12项目资料/（md + pdf + csv，两个项目组）",
+    "write_policy": "unit12_parse_demo",
+}
 
 # 项目隔离标识沿用单元07；查询必须带上它，否则会拿到别的项目的数据。
 PROJECT_ID = "e-commerce-after-sales"
@@ -83,6 +95,12 @@ def resolve_unit11_db_path() -> Path:
     return Path(override) if override else DEFAULT_UNIT11_DB_PATH
 
 
+def resolve_unit12_db_path() -> Path:
+    """单元12 的数据库目录：默认 `.chroma_unit12/`，可用 CHROMA_UNIT12_DB_DIR 覆盖。"""
+    override = os.environ.get("CHROMA_UNIT12_DB_DIR", "").strip()
+    return Path(override) if override else DEFAULT_UNIT12_DB_PATH
+
+
 def render_record_fields() -> str:
     """第1课要交的"记录字段图"：一条写进 Chroma 的记录由哪些部分组成。"""
     lines = ["写入 Chroma 的一条记录由这些部分组成：", "字段\t含义\t示例\t作用"]
@@ -98,6 +116,7 @@ class ChromaVectorStore:
         self,
         database_path: Path | None = None,
         collection_name: str = COLLECTION_NAME,
+        collection_metadata: dict | None = None,
     ) -> None:
         try:
             import chromadb
@@ -108,6 +127,9 @@ class ChromaVectorStore:
 
         from app.embedding import MODEL_NAME
 
+        # 单元12 的资料不是单元08 那批，集合元数据要如实写清它装的是什么；
+        # 不传就用单元08 的定义，保证前几个单元的验收现场一个字都不变。
+        metadata = dict(collection_metadata or COLLECTION_METADATA)
         self.database_path = Path(database_path) if database_path else resolve_db_path()
         # PersistentClient 把数据落到指定目录；重新连接只是再打开同一个目录。
         self.client = chromadb.PersistentClient(path=str(self.database_path))
@@ -116,7 +138,7 @@ class ChromaVectorStore:
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
             embedding_function=None,
-            metadata=COLLECTION_METADATA,
+            metadata=metadata,
         )
         # 复用已有集合时仍要核对模型标识，避免新旧向量混在一个集合里。
         recorded = (self.collection.metadata or {}).get("embedding_model")
@@ -125,8 +147,27 @@ class ChromaVectorStore:
                 f"集合记录的向量模型是 {recorded}，不是 {MODEL_NAME}，无法复用该集合"
             )
 
-    def count(self) -> int:
-        return self.collection.count()
+    def count(self, project_id: str | None = None) -> int:
+        """记录数；给了 project_id 就只数这个项目——单元12 要用它证明隔离。"""
+        if project_id is None:
+            return self.collection.count()
+        if not isinstance(project_id, str) or not project_id.strip():
+            raise ValueError("project_id 不能为空字符串")
+        return len(self.collection.get(where={"project_id": project_id})["ids"])
+
+    def read_record(self, document_id: str) -> dict:
+        """按稳定 ID 从数据库回读一条：证明原文与元数据都真的落盘了。
+
+        这里刻意不再去读源文件——回读的对象是数据库。
+        """
+        saved = self.collection.get(ids=[document_id], include=["documents", "metadatas"])
+        if not saved["ids"]:
+            raise KeyError(f"数据库中没有这条记录：{document_id}")
+        return {
+            "id": saved["ids"][0],
+            "text": saved["documents"][0],
+            "metadata": saved["metadatas"][0],
+        }
 
     def upsert_documents(self, records: list) -> int:
         """批量写入；同一 ID 再次写入会更新原记录，不会新增一条。"""

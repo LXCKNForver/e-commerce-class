@@ -1,4 +1,4 @@
-"""电商售后服务智能体：单元02—10 累计入口。
+"""电商售后服务智能体：单元02—12 累计入口。
 
 单元02 流式输出与多轮对话：/chat 走纯 stream 模式，保留多轮上下文。
 单元03 Prompt工程与模板：/compare 用同一份订单数据、同一个问题对比差/好提示词。
@@ -19,6 +19,10 @@
 单元11 分块优化与BGE重排：/chunk 用独立库 .chroma_unit11/ 建立整篇与子块两个集合，
 把 80 字符窗口、20 字符重叠的子块召回 Top5，再用本地 BGE Cross-Encoder 重排取前三，
 与整篇检索 Top3 并列对照两版候选、两版回答与引用，只改候选来源、不改生成环节。
+单元12 文档解析与知识库：/parse [项目] 用独立库 .chroma_unit12/ 把 Markdown、PDF、CSV
+三种格式解析成同一种带 project_id / source / location 的知识记录，所选项目解析 7 条，
+入库后从数据库回读 PDF 第 1 页与 CSV 第 2 行，重跑不重复，再切到另一个项目组
+证明库内共 14 条、但按项目计数仍然各 7 条。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -60,6 +64,8 @@ HELP_TEXT = """可用命令：
   /retrieve        单元09：检索服务——Top-3/Top-5、来源过滤、项目隔离、批量查询
   /rag [问题]      单元10：RAG 问答——拒答分支、编号上下文、真实模型生成、引用核验
   /chunk [问题]    单元11：80字符分块+20重叠召回Top5 → 本地BGE重排取前三 → 两版回答对照
+  /parse [项目]    单元12：md/pdf/csv 解析为同一种记录 → 入库 → 回读 → 重跑 → 换项目对照
+                  项目填 ecom（默认，本组电商售后）或 travel（课程另一组）
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -647,6 +653,38 @@ def demo_rag_optimized(question: str | None = None) -> None:
     print("BGE 分数是相关性 logit，与 Chroma 的 L2 距离方向相反、量纲不同，不能混算。")
 
 
+# ---------------------------------------------------------------- 单元12：文档解析
+
+
+def demo_parse(project_key: str | None = None) -> None:
+    """单元12：三种格式 → 同一种记录 → 入库 → 回读 → 重跑 → 换项目。"""
+    try:
+        from app.parse_lab import (
+            project_keys,
+            render_run,
+            run_parse,
+        )
+    except ImportError as exc:
+        print(
+            f"单元12 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma --extra parse"
+        )
+        return
+
+    print(f"可选项目：{project_keys()}（不填默认 ecom，即本组电商售后）")
+    try:
+        run = run_parse(project_key)
+    except (ValueError, FileNotFoundError, RuntimeError) as error:
+        # 项目名写错、资料目录缺失、依赖没装，都在这里给出可执行的下一步。
+        print(f"解析未执行：{error}")
+        return
+    print()
+    print(render_run(run))
+    print()
+    print("三种格式在磁盘上的最小单位不同（文档 / 页 / 行），解析层把它们压平成同一种记录；")
+    print("入库后一律按 project_id 过滤计数，所以资料和别的项目写在同一个集合里也不会串。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -739,6 +777,9 @@ def main() -> None:
             continue
         if command == "/chunk":
             demo_rag_optimized(payload or None)
+            continue
+        if command == "/parse":
+            demo_parse(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

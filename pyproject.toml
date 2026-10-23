@@ -9,6 +9,8 @@ dependencies = ["python-dotenv>=1.0.0"]
 deepseek = ["openai>=1.0.0"]
 embedding = ["fastembed>=0.9.0,<1.0"]
 chroma = ["chromadb>=0.4.0"]
+# 单元12 解析 PDF 用；Markdown 与 CSV 走标准库，不需要额外依赖。
+parse = ["pypdf>=4.0.0"]
 
 [tool.uv]
 index-url = "https://mirrors.aliyun.com/pypi/simple"

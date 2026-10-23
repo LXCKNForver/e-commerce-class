@@ -42,7 +42,11 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元11 在单元10 的问答流程上做优化，用独立库 `.chroma_unit11/`，库里两个集合并存：整篇 `after_sale_whole_docs`（15 条）与子块 `after_sale_chunks`（45 块）。命令是 `/chunk [问题]`：80 字符窗口 + 20 字符重叠切分 → 整篇 Top3 与分块 Top5 并列 → 本地 BGE Cross-Encoder 重排取前三 → 两版回答与引用对照。**两版共用同一个模型与同一份提示词**，只有候选来源不同（靠 `RAGService.answer_from_hits()` 锁死生成环节），所以差异只能归因于检索。本地重排权重 `bge-reranker-base` 约 1.1GB，不进仓库；把课程材料里的权重目录填进 `.env` 的 `RERANK_MODEL_DIR`（留空则读 `models/bge-reranker-base`），否则 `/chunk` 会在重排环节前提示不可用。
 
-默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`、`.chroma_unit8/`、`.chroma_unit9/`、`.chroma_unit10/`、`.chroma_unit11/` 不会提交到 GitHub。
+单元12 换了个方向：不问答，只解决「三种格式怎么变成同一种记录」。资料在 `模拟数据/单元12项目资料/`，两组各 3 篇 Markdown + 1 份 PDF + 1 份 CSV（本组 7 条、对照项目 7 条）。命令是 `/parse [项目]`（`ecom` 默认、`travel`）：Markdown 整篇一条（`document`）、PDF 每页一条（`page`）、CSV 每行一条（`row`，行号从 2 起），全部带上 `project_id` / `source` / `location` 后写进独立库 `.chroma_unit12/` 的**同一个集合**；再从数据库回读 PDF 第 1 页与 CSV 第 2 行，重跑验证条数不增长，最后切到另一个项目——库内 14 条，但按 `project_id` 数仍然各 7 条。**两个项目写在同一集合里，隔离靠元数据过滤，不靠分库。** PDF 解析要装 `pypdf`：`uv sync --extra parse`。
+
+默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`、`.chroma_unit8/`、`.chroma_unit9/`、`.chroma_unit10/`、`.chroma_unit11/`、`.chroma_unit12/` 不会提交到 GitHub。
+
+依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。
 
 ## 交互命令
 
@@ -64,6 +68,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 /retrieve        单元09：检索服务 Top-3/Top-5 + 来源过滤 + 项目隔离 + 批量查询
 /rag [问题]      单元10：RAG 问答——拒答分支、编号上下文、真实生成、引用核验
 /chunk [问题]    单元11：80字符分块召回Top5 → 本地BGE重排取前三 → 两版回答对照
+/parse [项目]    单元12：md/pdf/csv 解析 → 7条入库 → 回读PDF页与CSV行 → 重跑 → 换项目
+                项目填 ecom（默认）或 travel
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -79,6 +85,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 `/rag` 是单元10 的 RAG 闭环：`RAGService.answer()` 先调检索，**没有证据时直接返回拒答话术、一次模型都不调用**（用 `RecordingLLM` 计数器证明调用次数为 0）；有证据时把每条编上 `[1][2][3]` 编号，编号与来源文件一一对应，再连同问题交给真实 DeepSeek；最后抽取回答里的方括号编号，**只保留"引用了且编号合法"的来源，出现一个越界编号就整条判为不可核验**。注意这条核验只能证明编号存在且合法，证明不了答案每句话都忠于原文。
 
 `/chunk` 是单元11 的优化对照：把 15 篇资料按 80 字符窗口、20 字符重叠切成 45 块（子块 ID 带起止位置，重复导入只更新不增长），同一问题分别走「整篇 Top3」和「分块 Top5 → BGE 重排取前三」。BGE 输出的是相关性 logit（越大越相关），与 Chroma 的平方 L2 距离方向相反、量纲不同，不能混算也不能当概率。**重排只改顺序、不增删候选**，候选池之外的证据一条都找不回来——直接证据能不能进候选，靠的是分块而不是重排。
+
+`/parse` 是单元12 的解析入口：`parse_file()` 按后缀分三支（`.md` 整篇 / `.pdf` 逐页 / `.csv` 逐行），出口统一成 `KnowledgeRecord`，上层完全不知道资料原来是什么格式。稳定 ID = `项目:文件名:位置类型:位置`，所以重跑是更新而不是追加。回读用 `read_record()`（`collection.get(ids=...)`），证明原文与元数据真的落了盘。**坏文件不阻断整批**，逐个记录失败原因；但整批解析出 0 条会直接报错，不会静默写一个空批次。
 
 ## 工程内容
 
@@ -104,7 +112,9 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/chunking.py`：单元11 重叠分块，80 字符窗口 + 20 字符重叠，起止位置进 ID。
 - `app/rerank.py`：单元11 本地 BGE Cross-Encoder 重排（`rerank_hits` / `load_reranker` / `rerank_ready`）。
 - `app/rag_opt.py`：单元11 两版对照编排（整篇 Top3 vs 分块 Top5→重排前三）。
-- `tests/`：单元01—11 单元测试，197 项（单元06 需 `embedding`、单元07—11 需 `chroma`）。
+- `app/loaders.py`：单元12 三格式解析（`KnowledgeRecord` / `parse_file` / `load_materials`）。
+- `app/parse_lab.py`：单元12 流水线编排（解析 → 入库 → 回读 → 重跑 → 换项目）。
+- `tests/`：单元01—12 单元测试，221 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -113,11 +123,13 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元09验收证据.md`：单元09 的真实运行记录（Top-3/Top-5、来源过滤、跨项目空、批量、边界，脚本抓取）。
 - `docs/单元10验收证据.md`：单元10 的真实运行记录（拒答分支调用数 0、编号上下文、真实回答与引用核验，脚本抓取）。
 - `docs/单元11验收证据.md`：单元11 的真实运行记录（分块观察、两版召回、BGE 重排、直接证据定位、两版回答，脚本抓取）。
+- `docs/单元12验收证据.md`：单元12 的真实运行记录（解析清单、入库与回读、重跑与换项目、按项目计数、七类边界，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
 - `模拟数据/knowledge/`：15 份带 `DOC-02` 编号的售后知识文档。
 - `模拟数据/sample_questions.json`：起始验收问题。
+- `模拟数据/单元12项目资料/`：课程实践项目数据包的两组资料（本组 3 篇 md + 1 份 PDF + 1 份 CSV；对照项目同结构），共解析 14 条。
 - `验证数据.py`：老师提供的数据检查脚本。
 
 ## 四个受控工具（全部只读）
@@ -131,7 +143,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 ## 小组任务与日报
 
-从 [项目管理/README.md](项目管理/README.md) 查看第 01—10 单元的五人分工、提交清单、验收标准和每日记录。任务安排与实际完成情况分开记录；完成后在对应日期的日报中填写本人结果和证据链接，由组长审核。
+从 [项目管理/README.md](项目管理/README.md) 查看第 01—12 单元的五人分工、提交清单、验收标准和每日记录。任务安排与实际完成情况分开记录；完成后在对应日期的日报中填写本人结果和证据链接，由组长审核。
 
 ## 来源
 
