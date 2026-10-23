@@ -15,3 +15,5 @@ models/
 .chroma_unit9/
 # 单元10 RAG 问答的运行产物（本地 SQLite），不是源代码。
 .chroma_unit10/
+# 单元11 分块与重排的运行产物（本地 SQLite，库内含整篇与子块两个集合），不是源代码。
+.chroma_unit11/

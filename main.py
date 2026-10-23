@@ -16,6 +16,9 @@
 单元10 RAG问答：/rag 用独立库 .chroma_unit10/ 复用单元09 的检索服务，
 无证据时直接拒答且不调用模型，命中时编好带编号的证据上下文再交给真实 DeepSeek，
 最后核验引用编号是否合法、来源是否真实存在。
+单元11 分块优化与BGE重排：/chunk 用独立库 .chroma_unit11/ 建立整篇与子块两个集合，
+把 80 字符窗口、20 字符重叠的子块召回 Top5，再用本地 BGE Cross-Encoder 重排取前三，
+与整篇检索 Top3 并列对照两版候选、两版回答与引用，只改候选来源、不改生成环节。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -56,6 +59,7 @@ HELP_TEXT = """可用命令：
   /ingest          单元08：批量写入本组售后资料 + 重新连接 + 项目内 Top3 检索
   /retrieve        单元09：检索服务——Top-3/Top-5、来源过滤、项目隔离、批量查询
   /rag [问题]      单元10：RAG 问答——拒答分支、编号上下文、真实模型生成、引用核验
+  /chunk [问题]    单元11：80字符分块+20重叠召回Top5 → 本地BGE重排取前三 → 两版回答对照
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -542,6 +546,107 @@ def demo_rag(question: str | None = None) -> None:
     print("越界编号会被判为不可核验，宁可不给来源也不放行。")
 
 
+# ---------------------------------------------------------------- 单元11：分块 + 重排
+
+
+def demo_rag_optimized(question: str | None = None) -> None:
+    """单元11：分块召回 → BGE 重排 → 取前三 → 两版回答对照。"""
+    try:
+        from app.chroma_store import (
+            PROJECT_ID,
+            UNIT11_CHUNK_COLLECTION,
+            UNIT11_WHOLE_COLLECTION,
+            ChromaVectorStore,
+            resolve_unit11_db_path,
+        )
+        from app.chunking import (
+            CHUNK_OVERLAP,
+            CHUNK_SIZE,
+            DEMO_SOURCE as CHUNK_DEMO_SOURCE,
+            chunks_of,
+            render_chunk_positions,
+            split_documents,
+            split_whole_documents,
+        )
+        from app.ingest import load_markdown
+        from app.rag import RecordingLLM
+        from app.rag_opt import (
+            DEMO_QUESTION,
+            RAGOptimizer,
+            render_answers,
+            render_evidence_check,
+            render_recall,
+        )
+        from app.rerank import load_reranker, render_order_change, render_ranked, rerank_ready
+        from app.retriever import RetrievalService
+    except ImportError as exc:
+        print(
+            f"单元11 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma"
+        )
+        return
+
+    # 第1课：本单元独立库，整篇与子块各占一个集合，与其他单元互不干扰。
+    records = load_markdown()
+    database_path = resolve_unit11_db_path()
+    whole_store = ChromaVectorStore(database_path, UNIT11_WHOLE_COLLECTION)
+    chunk_store = ChromaVectorStore(database_path, UNIT11_CHUNK_COLLECTION)
+    whole_docs = split_whole_documents(records)
+    chunks = split_documents(records)
+    whole_store.upsert_documents(whole_docs)
+    chunk_store.upsert_documents(chunks)
+    print(f"数据库目录：{database_path}")
+    print(f"集合：{whole_store.collection.name}（{whole_store.count()} 条）"
+          f" / {chunk_store.collection.name}（{chunk_store.count()} 条）")
+    print(f"项目：{PROJECT_ID}；切分参数：{CHUNK_SIZE} 字符窗口 + {CHUNK_OVERLAP} 字符重叠")
+
+    # 0–8 分钟：相邻块的起止位置与重叠内容，这是后面所有环节的地基。
+    print()
+    print(render_chunk_positions(chunks_of(chunks, CHUNK_DEMO_SOURCE)))
+
+    target = question or DEMO_QUESTION
+    # 缺少本地权重就早说，避免讲到重排那一步才报错。
+    ready, detail = rerank_ready()
+    if not ready:
+        print()
+        print(f"本地 BGE 重排不可用：{detail}")
+        print("请按课程材料说明下载 bge-reranker-base，或在 .env 里设置 RERANK_MODEL_DIR。")
+        return
+    load_reranker()
+
+    llm = RecordingLLM(build_llm())
+    optimizer = RAGOptimizer(
+        RetrievalService(whole_store), RetrievalService(chunk_store), llm
+    )
+    # 一次性跑完整轮：召回、重排、两版回答都在这里完成，下面按课堂节奏分段打印。
+    run = optimizer.compare(target, PROJECT_ID, len(whole_docs), len(chunks))
+
+    # 8–16 分钟：同一道题走两条召回路径，整篇 Top3 与分块 Top5 并列。
+    print()
+    print(render_recall(run))
+
+    # 16–28 分钟：原问题与每个候选成对送进 BGE，配对后降序，取前三。
+    print()
+    print(render_ranked(run.ranked))
+    print()
+    print(render_order_change(run.candidates[:3], run.optimized_hits))
+    print()
+    print(render_evidence_check(run))
+
+    # 28–35 分钟：两版共用同一个模型与提示词，只有候选来源不同。
+    if type(llm.inner).__name__ == "MockLLM":
+        print()
+        print("提示：当前是离线 mock 模式，MockLLM 的回答不带 [n] 引用编号，")
+        print("     所以下面两版都会被引用核验判为不可核验。这是编排规则在生效，不是 bug；")
+        print("     想看真实 DeepSeek 的回答，在 .env 里把 LLM_PROVIDER 改成 deepseek。")
+    print()
+    print(render_answers(run))
+    print()
+    print(f"模型累计调用次数：{llm.call_count}（两版各一次）")
+    print("重排只能改变已经召回的候选顺序，不能找回候选池之外的证据；")
+    print("BGE 分数是相关性 logit，与 Chroma 的 L2 距离方向相反、量纲不同，不能混算。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -631,6 +736,9 @@ def main() -> None:
             continue
         if command == "/rag":
             demo_rag(payload or None)
+            continue
+        if command == "/chunk":
+            demo_rag_optimized(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

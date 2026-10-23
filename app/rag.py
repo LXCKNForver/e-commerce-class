@@ -135,7 +135,15 @@ class RAGService:
 
         # ① 检索：这一步还没有任何模型参与。
         hits = self.retrieve(question, project_id, top_k or self.top_k)
+        return self.answer_from_hits(question, hits)
 
+    def answer_from_hits(self, question: str, hits: list[SearchResult]) -> RAGResult:
+        """跳过检索、直接拿已有候选回答。
+
+        单元11 要用它对照两版答案：候选已经由整篇检索或"分块+重排"准备好，
+        检索那一步的结果不一样，其余四步（拒答、编号、生成、核验）必须完全相同，
+        否则两版差异就说不清是检索带来的还是提示词带来的。
+        """
         # ② 未命中：没有证据就拒答，绝不把空上下文丢给模型让它自由发挥。
         if not hits:
             return RAGResult(question, NO_EVIDENCE_ANSWER, hits=hits, llm_called=False)

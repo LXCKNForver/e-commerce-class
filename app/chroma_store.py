@@ -37,6 +37,12 @@ DEFAULT_UNIT9_DB_PATH = PROJECT_ROOT / ".chroma_unit9"
 # 单元10 的 RAG 问答再用一个独立库：任务卡要求"数据库留在本单元目录"，
 # 三个单元的库目录互不干扰，各自保住自己的复现现场。
 DEFAULT_UNIT10_DB_PATH = PROJECT_ROOT / ".chroma_unit10"
+# 单元11 分块与重排再用一个独立库：整篇与子块各占一个集合，放在同一个库目录里，
+# 与其他单元的库目录互不干扰，各自保住自己的复现现场。
+DEFAULT_UNIT11_DB_PATH = PROJECT_ROOT / ".chroma_unit11"
+# 同一库里有两种切分策略，必须分开存；混在一个集合里，命中来源就说不清了。
+UNIT11_WHOLE_COLLECTION = "after_sale_whole_docs"
+UNIT11_CHUNK_COLLECTION = "after_sale_chunks"
 
 # 项目隔离标识沿用单元07；查询必须带上它，否则会拿到别的项目的数据。
 PROJECT_ID = "e-commerce-after-sales"
@@ -69,6 +75,12 @@ def resolve_unit10_db_path() -> Path:
     """单元10 的数据库目录：默认 `.chroma_unit10/`，可用 CHROMA_UNIT10_DB_DIR 覆盖。"""
     override = os.environ.get("CHROMA_UNIT10_DB_DIR", "").strip()
     return Path(override) if override else DEFAULT_UNIT10_DB_PATH
+
+
+def resolve_unit11_db_path() -> Path:
+    """单元11 的数据库目录：默认 `.chroma_unit11/`，可用 CHROMA_UNIT11_DB_DIR 覆盖。"""
+    override = os.environ.get("CHROMA_UNIT11_DB_DIR", "").strip()
+    return Path(override) if override else DEFAULT_UNIT11_DB_PATH
 
 
 def render_record_fields() -> str:
