@@ -40,7 +40,9 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元10 的 RAG 问答再用一个独立库 `.chroma_unit10/`（任务卡要求「数据库留在本单元目录」）。它完全复用单元09 的检索服务，只多了编排：检索 → 无证据拒答 → 编号上下文 → 真实 DeepSeek 生成 → 引用核验，命令是 `/rag [问题]`。**无证据时压根不调用模型**（`/rag` 会打印「模型累计调用次数：0」），这需要 `.env` 里配好 `DEEPSEEK_API_KEY` 且 `LLM_PROVIDER=deepseek`；密钥本身就留在本机，不进输出也不进仓库。
 
-默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`、`.chroma_unit8/`、`.chroma_unit9/`、`.chroma_unit10/` 不会提交到 GitHub。
+单元11 在单元10 的问答流程上做优化，用独立库 `.chroma_unit11/`，库里两个集合并存：整篇 `after_sale_whole_docs`（15 条）与子块 `after_sale_chunks`（45 块）。命令是 `/chunk [问题]`：80 字符窗口 + 20 字符重叠切分 → 整篇 Top3 与分块 Top5 并列 → 本地 BGE Cross-Encoder 重排取前三 → 两版回答与引用对照。**两版共用同一个模型与同一份提示词**，只有候选来源不同（靠 `RAGService.answer_from_hits()` 锁死生成环节），所以差异只能归因于检索。本地重排权重 `bge-reranker-base` 约 1.1GB，不进仓库；把课程材料里的权重目录填进 `.env` 的 `RERANK_MODEL_DIR`（留空则读 `models/bge-reranker-base`），否则 `/chunk` 会在重排环节前提示不可用。
+
+默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`、`.chroma_unit8/`、`.chroma_unit9/`、`.chroma_unit10/`、`.chroma_unit11/` 不会提交到 GitHub。
 
 ## 交互命令
 
@@ -61,6 +63,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 /ingest          单元08：本组资料批量写入 + 重新连接核对 + 项目内 Top 3 检索
 /retrieve        单元09：检索服务 Top-3/Top-5 + 来源过滤 + 项目隔离 + 批量查询
 /rag [问题]      单元10：RAG 问答——拒答分支、编号上下文、真实生成、引用核验
+/chunk [问题]    单元11：80字符分块召回Top5 → 本地BGE重排取前三 → 两版回答对照
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -74,6 +77,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 `/retrieve` 是单元09 的检索服务入口：`RetrievalService.search()` 与 `search_many()` 返回统一的 `SearchResult`（原文、来源、项目标识、资料类型、距离、余弦），单条接口直接委托批量接口，两个入口的排序与过滤规则只有一份实现。`project_id` 是必选过滤条件、留空直接报错；`source` 为可选的精确过滤。**命中不足 K 条时实际返回条数会少于 K**，这是过滤生效的正常表现。
 
 `/rag` 是单元10 的 RAG 闭环：`RAGService.answer()` 先调检索，**没有证据时直接返回拒答话术、一次模型都不调用**（用 `RecordingLLM` 计数器证明调用次数为 0）；有证据时把每条编上 `[1][2][3]` 编号，编号与来源文件一一对应，再连同问题交给真实 DeepSeek；最后抽取回答里的方括号编号，**只保留"引用了且编号合法"的来源，出现一个越界编号就整条判为不可核验**。注意这条核验只能证明编号存在且合法，证明不了答案每句话都忠于原文。
+
+`/chunk` 是单元11 的优化对照：把 15 篇资料按 80 字符窗口、20 字符重叠切成 45 块（子块 ID 带起止位置，重复导入只更新不增长），同一问题分别走「整篇 Top3」和「分块 Top5 → BGE 重排取前三」。BGE 输出的是相关性 logit（越大越相关），与 Chroma 的平方 L2 距离方向相反、量纲不同，不能混算也不能当概率。**重排只改顺序、不增删候选**，候选池之外的证据一条都找不回来——直接证据能不能进候选，靠的是分块而不是重排。
 
 ## 工程内容
 
@@ -96,7 +101,10 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/retriever.py`：单元09 检索服务（`SearchResult` / `RetrievalService` / `render_results`）。
 - `app/rag.py`：单元10 RAG 编排（`RAGService` / `RAGResult` / `RecordingLLM`）。
 - `app/rag_prompts.py`：单元10 RAG 提示词，与单元03 订单问答提示词分开维护。
-- `tests/`：单元01—10 单元测试，170 项（单元06 需 `embedding`、单元07—10 需 `chroma`）。
+- `app/chunking.py`：单元11 重叠分块，80 字符窗口 + 20 字符重叠，起止位置进 ID。
+- `app/rerank.py`：单元11 本地 BGE Cross-Encoder 重排（`rerank_hits` / `load_reranker` / `rerank_ready`）。
+- `app/rag_opt.py`：单元11 两版对照编排（整篇 Top3 vs 分块 Top5→重排前三）。
+- `tests/`：单元01—11 单元测试，197 项（单元06 需 `embedding`、单元07—11 需 `chroma`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -104,6 +112,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元08验收证据.md`：单元08 的真实运行记录（全新库首次导入 + 真实库重复运行两次，脚本抓取）。
 - `docs/单元09验收证据.md`：单元09 的真实运行记录（Top-3/Top-5、来源过滤、跨项目空、批量、边界，脚本抓取）。
 - `docs/单元10验收证据.md`：单元10 的真实运行记录（拒答分支调用数 0、编号上下文、真实回答与引用核验，脚本抓取）。
+- `docs/单元11验收证据.md`：单元11 的真实运行记录（分块观察、两版召回、BGE 重排、直接证据定位、两版回答，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
