@@ -44,9 +44,11 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元12 换了个方向：不问答，只解决「三种格式怎么变成同一种记录」。资料在 `模拟数据/单元12项目资料/`，两组各 3 篇 Markdown + 1 份 PDF + 1 份 CSV（本组 7 条、对照项目 7 条）。命令是 `/parse [项目]`（`ecom` 默认、`travel`）：Markdown 整篇一条（`document`）、PDF 每页一条（`page`）、CSV 每行一条（`row`，行号从 2 起），全部带上 `project_id` / `source` / `location` 后写进独立库 `.chroma_unit12/` 的**同一个集合**；再从数据库回读 PDF 第 1 页与 CSV 第 2 行，重跑验证条数不增长，最后切到另一个项目——库内 14 条，但按 `project_id` 数仍然各 7 条。**两个项目写在同一集合里，隔离靠元数据过滤，不靠分库。** PDF 解析要装 `pypdf`：`uv sync --extra parse`。
 
-默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`、`.chroma_unit8/`、`.chroma_unit9/`、`.chroma_unit10/`、`.chroma_unit11/`、`.chroma_unit12/` 不会提交到 GitHub。
+单元13 给前面所有单元装上"尺子"：用独立库 `.chroma_unit13/` 装载本组资料，对根目录 `evaluation_cases.json` 里的 3 道评估题跑完整闭环——**检索与回答复用单元09/10**（不重写检索），本单元只加两类打分与落库。命令是 `/eval`（跑完 3 题）、`/eval 1`（先跑 1 题确认，对应任务卡的 `main.py --limit 1`）、`/eval summary`（汇总均值与反馈）、`/eval feedback 日志ID good|bad`（给单题打标记）。两类指标必须分开看：`Precision@3` / `Recall@3` 是**规则算的**（比对人工标注的来源文件，零模型调用；Recall 按去重来源算，重复片段不虚增覆盖率）;`Context Precision` / `Context Recall` / `Faithfulness` 是 **DeepSeek 当评审给的模型判断**。日志落在本地 `rag_monitor.sqlite3` 的 `rag_logs` 表（九列：ID、时间、题号、问题、Precision、Recall、RAGAS、耗时、反馈），会话结束后可复盘。RAGAS 评审要装 `ragas`：`uv sync --extra evaluation`（须 0.4.3 及以上，0.3.x 与新版 langchain-community 冲突）。
 
-依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。
+默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit13/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
+
+依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。
 
 ## 交互命令
 
@@ -70,6 +72,9 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 /chunk [问题]    单元11：80字符分块召回Top5 → 本地BGE重排取前三 → 两版回答对照
 /parse [项目]    单元12：md/pdf/csv 解析 → 7条入库 → 回读PDF页与CSV行 → 重跑 → 换项目
                 项目填 ecom（默认）或 travel
+/eval [参数]    单元13：评估闭环——检索/回答/两类指标/SQLite 日志/反馈/汇总
+                不带参数跑完 3 题；/eval 1 只跑 1 题；/eval summary 看汇总；
+                /eval feedback 2 bad 给第 2 条日志打反馈
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -87,6 +92,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 `/chunk` 是单元11 的优化对照：把 15 篇资料按 80 字符窗口、20 字符重叠切成 45 块（子块 ID 带起止位置，重复导入只更新不增长），同一问题分别走「整篇 Top3」和「分块 Top5 → BGE 重排取前三」。BGE 输出的是相关性 logit（越大越相关），与 Chroma 的平方 L2 距离方向相反、量纲不同，不能混算也不能当概率。**重排只改顺序、不增删候选**，候选池之外的证据一条都找不回来——直接证据能不能进候选，靠的是分块而不是重排。
 
 `/parse` 是单元12 的解析入口：`parse_file()` 按后缀分三支（`.md` 整篇 / `.pdf` 逐页 / `.csv` 逐行），出口统一成 `KnowledgeRecord`，上层完全不知道资料原来是什么格式。稳定 ID = `项目:文件名:位置类型:位置`，所以重跑是更新而不是追加。回读用 `read_record()`（`collection.get(ids=...)`），证明原文与元数据真的落了盘。**坏文件不阻断整批**，逐个记录失败原因；但整批解析出 0 条会直接报错，不会静默写一个空批次。
+
+`/eval` 是单元13 的评估入口：一题走四步——检索（复用单元09 `RetrievalService`）→ 回答（复用单元10 `RAGService`）→ 打分（`retrieval_scores` 规则算 + `ragas_scores` 让 DeepSeek 当评审）→ 落库（`LogStore.record()` 写进 `rag_logs`）。**Precision@3 按条数计、Recall@3 按去重来源计**，所以同一份 CSV 的三行全命中也不会让覆盖率虚增。来源在比较前统一取路径最后一段，因为题集标注文件名、库里存相对路径。**评审调用失败写进 `error` 如实记录，绝不写假分数**；汇总时这些行不进均值。反馈只打标记、不改动已落库分数。
 
 ## 工程内容
 
@@ -114,7 +121,10 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/rag_opt.py`：单元11 两版对照编排（整篇 Top3 vs 分块 Top5→重排前三）。
 - `app/loaders.py`：单元12 三格式解析（`KnowledgeRecord` / `parse_file` / `load_materials`）。
 - `app/parse_lab.py`：单元12 流水线编排（解析 → 入库 → 回读 → 重跑 → 换项目）。
-- `tests/`：单元01—12 单元测试，221 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`）。
+- `app/evaluation.py`：单元13 两类指标（规则 `retrieval_scores` + RAGAS `ragas_scores`）。
+- `app/monitoring.py`：单元13 SQLite 日志（`LogStore`：记录 / 反馈 / 汇总 / 读表）。
+- `app/eval_lab.py`：单元13 闭环编排（解析入库 → 检索回答 → 打分 → 落库 → 反馈 → 汇总）。
+- `tests/`：单元01—13 单元测试，251 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -124,12 +134,14 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元10验收证据.md`：单元10 的真实运行记录（拒答分支调用数 0、编号上下文、真实回答与引用核验，脚本抓取）。
 - `docs/单元11验收证据.md`：单元11 的真实运行记录（分块观察、两版召回、BGE 重排、直接证据定位、两版回答，脚本抓取）。
 - `docs/单元12验收证据.md`：单元12 的真实运行记录（解析清单、入库与回读、重跑与换项目、按项目计数、七类边界，脚本抓取）。
+- `docs/单元13验收证据.md`：单元13 的真实运行记录（题集、单题与三题闭环、rag_logs 表、反馈与汇总、指标说明、低分样例分析、边界，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
 - `模拟数据/knowledge/`：15 份带 `DOC-02` 编号的售后知识文档。
 - `模拟数据/sample_questions.json`：起始验收问题。
 - `模拟数据/单元12项目资料/`：课程实践项目数据包的两组资料（本组 3 篇 md + 1 份 PDF + 1 份 CSV；对照项目同结构），共解析 14 条。
+- `模拟数据/单元13评估题/`：课程为两个项目组提供的评估题原件各一份（本组那一份同时放在项目根 `evaluation_cases.json` 作为激活题集）。
 - `验证数据.py`：老师提供的数据检查脚本。
 
 ## 四个受控工具（全部只读）

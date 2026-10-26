@@ -19,3 +19,7 @@ models/
 .chroma_unit11/
 # 单元12 文档解析的运行产物（本地 SQLite，库内含两个项目组的 14 条资料），不是源代码。
 .chroma_unit12/
+# 单元13 评估的运行产物（本地 SQLite，只装本组资料），不是源代码。
+.chroma_unit13/
+# 单元13 评估日志库（每次问答写入一行），不是源代码。
+rag_monitor.sqlite3

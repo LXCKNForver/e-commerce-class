@@ -11,6 +11,10 @@ embedding = ["fastembed>=0.9.0,<1.0"]
 chroma = ["chromadb>=0.4.0"]
 # 单元12 解析 PDF 用；Markdown 与 CSV 走标准库，不需要额外依赖。
 parse = ["pypdf>=4.0.0"]
+# 单元13 RAGAS 评估用；评估指标本身只依赖标准库，装不装都能跑检索指标。
+# 0.4.3 起指标在 ragas.metrics.collections 下（与课程参考实现同 API），且不再依赖
+# langchain_community 的 vertexai 模块（ragas 0.3.1 配 langchain-community 0.4 会导入失败）。
+evaluation = ["ragas>=0.4.3"]
 
 [tool.uv]
 index-url = "https://mirrors.aliyun.com/pypi/simple"

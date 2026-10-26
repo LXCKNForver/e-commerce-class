@@ -1,4 +1,4 @@
-"""电商售后服务智能体：单元02—12 累计入口。
+"""电商售后服务智能体：单元02—13 累计入口。
 
 单元02 流式输出与多轮对话：/chat 走纯 stream 模式，保留多轮上下文。
 单元03 Prompt工程与模板：/compare 用同一份订单数据、同一个问题对比差/好提示词。
@@ -23,6 +23,12 @@
 三种格式解析成同一种带 project_id / source / location 的知识记录，所选项目解析 7 条，
 入库后从数据库回读 PDF 第 1 页与 CSV 第 2 行，重跑不重复，再切到另一个项目组
 证明库内共 14 条、但按项目计数仍然各 7 条。
+单元13 RAG系统评估与监控：/eval 用独立库 .chroma_unit13/ 装载本组资料，对
+evaluation_cases.json 里的 3 道评估题跑完整闭环——复用单元09/10 的检索与回答，
+再给每题算两类分数：规则算的 Precision@3/Recall@3（比对人工标注的来源文件），
+以及 DeepSeek 当评审的 RAGAS Context Precision/Recall 与 Faithfulness；
+每题连同 Top-3 证据、答案、分数、耗时写进本地 SQLite 的 rag_logs 表，
+/eval summary 汇总均值与反馈，/eval feedback ID good|bad 给单题打标记。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -66,6 +72,9 @@ HELP_TEXT = """可用命令：
   /chunk [问题]    单元11：80字符分块+20重叠召回Top5 → 本地BGE重排取前三 → 两版回答对照
   /parse [项目]    单元12：md/pdf/csv 解析为同一种记录 → 入库 → 回读 → 重跑 → 换项目对照
                   项目填 ecom（默认，本组电商售后）或 travel（课程另一组）
+  /eval [参数]    单元13：评估闭环——检索/回答/两类指标/SQLite 日志/反馈/汇总
+                  不带参数跑完 3 题；/eval 1 只跑 1 题；/eval summary 看汇总；
+                  /eval feedback 2 bad 给第 2 条日志打反馈
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -685,6 +694,104 @@ def demo_parse(project_key: str | None = None) -> None:
     print("入库后一律按 project_id 过滤计数，所以资料和别的项目写在同一个集合里也不会串。")
 
 
+# ---------------------------------------------------------------- 单元13：RAG 评估与监控
+
+
+def demo_evaluation(argument: str | None = None) -> None:
+    """单元13：评估闭环——跑去打分落库 / 看汇总 / 打反馈。
+
+    参数三种：不带（跑完 3 题）、题数（只跑前几题）、summary / feedback。
+    任务卡的课堂节奏是"先 1 题确认，再跑 3 题"，所以留了 `/eval 1`。
+    """
+    try:
+        from app.eval_lab import (
+            DEFAULT_LOG_DB,
+            EXPECTED_CASES,
+            build_eval_service,
+            read_summary,
+            render_rows,
+            render_run,
+            render_summary,
+            run_evaluation,
+            set_feedback,
+        )
+        from app.monitoring import LogStore
+    except ImportError as exc:
+        print(
+            f"单元13 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma --extra parse --extra evaluation"
+        )
+        return
+
+    words = (argument or "").strip().split()
+
+    # 汇总直接从日志表里算，不重跑模型、不重复花钱。
+    if words and words[0] == "summary":
+        print(render_summary(read_summary()))
+        rows = LogStore(DEFAULT_LOG_DB).rows(3)
+        if rows:
+            print()
+            print(render_rows(rows))
+        return
+
+    # 反馈只标记某一题，历史分数一律不改——评估记录要能复盘。
+    if words and words[0] == "feedback":
+        if len(words) != 3:
+            print("用法：/eval feedback 日志ID good|bad（例如 /eval feedback 2 bad）")
+            return
+        try:
+            log_id = int(words[1])
+        except ValueError:
+            print(f"日志ID 必须是整数：{words[1]}")
+            return
+        try:
+            set_feedback(log_id, words[2])
+        except (ValueError, KeyError) as error:
+            print(f"反馈未保存：{error}")
+            return
+        print(f"日志 {log_id} 的反馈已保存：{words[2]}")
+        print(render_summary(read_summary()))
+        return
+
+    limit = EXPECTED_CASES
+    if words:
+        if not words[0].isdigit():
+            print(
+                "用法：/eval（跑 3 题）| /eval 1（只跑 1 题）"
+                " | /eval summary | /eval feedback 日志ID good|bad"
+            )
+            return
+        limit = int(words[0])
+    if limit < 1:
+        print("题数必须大于 0；用法：/eval（跑 3 题）| /eval 1（只跑 1 题）")
+        return
+
+    try:
+        service, _store = build_eval_service()
+    except (ImportError, FileNotFoundError, RuntimeError) as error:
+        print(f"评估未执行：{error}")
+        print("请先执行：uv sync --extra embedding --extra chroma --extra parse --extra evaluation")
+        return
+
+    inner = getattr(service.llm, "inner", service.llm)
+    if type(inner).__name__ == "MockLLM":
+        print()
+        print("提示：当前是离线 mock 模式，MockLLM 的回答不带 [n] 引用编号，")
+        print("     会被引用核验挡下，评分只是流程演示、不代表真实效果；")
+        print("     想把本研究跑真实，在 .env 里把 LLM_PROVIDER 改成 deepseek。")
+
+    run = run_evaluation(limit, service=service)
+    print()
+    print(render_run(run))
+    print()
+    print(render_rows(LogStore(run.log_path).rows(limit)))
+    print()
+    print(f"日志数据库：{run.log_path}")
+    print("下一步：/eval summary 看汇总；/eval feedback 日志ID good|bad 标记单题反馈。")
+    print("两类指标不是一回事：Precision@3/Recall@3 是规则算的（按标注来源），")
+    print("RAGAS 三个分数是 DeepSeek 当评审给的模型判断。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -780,6 +887,9 @@ def main() -> None:
             continue
         if command == "/parse":
             demo_parse(payload or None)
+            continue
+        if command == "/eval":
+            demo_evaluation(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

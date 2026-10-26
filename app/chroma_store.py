@@ -55,6 +55,18 @@ UNIT12_COLLECTION_METADATA = {
     "content_source": "模拟数据/单元12项目资料/（md + pdf + csv，两个项目组）",
     "write_policy": "unit12_parse_demo",
 }
+# 单元13 评估再用一个独立库：评估要的是"可复现的评估现场"，不能把单元12
+# 演示用的 14 条混进来——评估题的 expected_sources 只标了本组 7 条对应的文件名，
+# 库里多出另一个项目的资料，Precision@3 / Recall@3 就说不清是哪个集合算出来的。
+DEFAULT_UNIT13_DB_PATH = PROJECT_ROOT / ".chroma_unit13"
+UNIT13_COLLECTION = "after_sale_eval_knowledge"
+UNIT13_COLLECTION_METADATA = {
+    "purpose": "unit13_rag_evaluation",
+    "embedding_model": "BAAI/bge-small-zh-v1.5",
+    "dimension": 512,
+    "content_source": "模拟数据/单元12项目资料/电商售后服务智能体项目组（本组 3md+1pdf+1csv）",
+    "write_policy": "unit13_eval_only",
+}
 
 # 项目隔离标识沿用单元07；查询必须带上它，否则会拿到别的项目的数据。
 PROJECT_ID = "e-commerce-after-sales"
@@ -99,6 +111,15 @@ def resolve_unit12_db_path() -> Path:
     """单元12 的数据库目录：默认 `.chroma_unit12/`，可用 CHROMA_UNIT12_DB_DIR 覆盖。"""
     override = os.environ.get("CHROMA_UNIT12_DB_DIR", "").strip()
     return Path(override) if override else DEFAULT_UNIT12_DB_PATH
+
+
+def resolve_unit13_db_path() -> Path:
+    """单元13 的数据库目录：默认 `.chroma_unit13/`，可用 CHROMA_UNIT13_DB_DIR 覆盖。
+
+    评估也可以各自跑一遍再对分数，用环境变量把库切到别处即可互不影响。
+    """
+    override = os.environ.get("CHROMA_UNIT13_DB_DIR", "").strip()
+    return Path(override) if override else DEFAULT_UNIT13_DB_PATH
 
 
 def render_record_fields() -> str:
