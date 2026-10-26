@@ -91,6 +91,9 @@ class ParseRun:
     other_records: int = 0
     after_other_count: int = 0
     total_count: int = 0
+    # 课程另一个项目组的资料目录可能不在仓库里（例如被人从工作区删掉）：
+    # 这时不整条流水线崩掉，而是如实记下"缺对照项目"，让用户看得见原因。
+    other_missing: bool = False
 
     @property
     def stable(self) -> bool:
@@ -148,16 +151,25 @@ def run_parse(
     # 再切到另一个项目：库里变成 14 条，但本项目仍然只有 7 条。
     if with_other_project:
         other = next(spec for spec in PROJECTS.values() if spec.key != project.key)
-        other_records, other_failures = load_materials(other.folder, other.project_id)
-        if other_records:
-            store.upsert_documents(other_records)
+        if not other.folder.is_dir():
+            # 对照项目的资料不在工作区里：如实记录，不伪造那 7 条。
+            run.other_missing = True
+            run.failures = failures + [
+                (f"{other.key}/", f"对照项目资料目录不存在：{other.folder}")
+            ]
+            run.after_other_count = run.rerun_count
+            run.total_count = store.count()
+        else:
+            other_records, other_failures = load_materials(other.folder, other.project_id)
+            if other_records:
+                store.upsert_documents(other_records)
+            run.other_records = len(other_records)
+            run.failures = failures + [
+                (f"{other.key}/{name}", reason) for name, reason in other_failures
+            ]
+            run.after_other_count = store.count(project.project_id)
+            run.total_count = store.count()
         run.other_project = other
-        run.other_records = len(other_records)
-        run.failures = failures + [
-            (f"{other.key}/{name}", reason) for name, reason in other_failures
-        ]
-        run.after_other_count = store.count(project.project_id)
-        run.total_count = store.count()
     else:
         run.after_other_count = run.rerun_count
         run.total_count = store.count()
@@ -214,7 +226,18 @@ def render_rerun(run: ParseRun) -> str:
         "  稳定 ID = 项目 + 文件名 + 位置类型 + 位置；再次解析同一个文件 ID 不变，",
         "  所以 upsert 是更新同一条，不会追加第二条——这就是「重跑不重复」。",
     ]
-    if run.other_project is not None:
+    if run.other_project is not None and run.other_missing:
+        lines.extend(
+            [
+                "",
+                f"对照项目（{run.other_project.key} → {run.other_project.project_id}）"
+                f"的资料目录不在仓库里：{run.other_project.folder}",
+                "已跳过跨项目对照，不伪造另一组资料；库内总数仍为本项目自己的 "
+                f"{run.total_count} 条。",
+                "想恢复“两个项目共 14 条”的对照，把该目录放回仓库里再跑一次即可。",
+            ]
+        )
+    elif run.other_project is not None:
         lines.extend(
             [
                 "",

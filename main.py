@@ -30,6 +30,10 @@ evaluation_cases.json 里的 3 道评估题跑完整闭环——复用单元09/1
 每题连同 Top-3 证据、答案、分数、耗时写进本地 SQLite 的 rag_logs 表，
 /eval summary 汇总均值与反馈，/eval feedback ID good|bad 给单题打标记。
 
+单元14 ReAct Agent：/act 让模型只提动作、由 Python 执行真实检索——复用单元09 的
+检索服务和单元12 的本组资料（独立库 .chroma_unit14/），逐轮打印决策、动作、观察，
+再用 max_steps 2 重跑同一道复杂题，对比 finished 与 max_steps 两种停止状态。
+
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
 
@@ -75,6 +79,11 @@ HELP_TEXT = """可用命令：
   /eval [参数]    单元13：评估闭环——检索/回答/两类指标/SQLite 日志/反馈/汇总
                   不带参数跑完 3 题；/eval 1 只跑 1 题；/eval summary 看汇总；
                   /eval feedback 2 bad 给第 2 条日志打反馈
+  /act [参数]     单元14：ReAct——模型提动作，Python 执行真实检索
+                  不带参数用单事项问题；/act 你的问题 自定义单事项问题；
+                  /act double 跑双事项问题（观察第二轮检索）；
+                  /act limit 用 max_steps 2 重跑（看未完成的停止状态）；
+                  /act demo 按任务卡顺序跑完三段并做轨迹对比
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -792,6 +801,89 @@ def demo_evaluation(argument: str | None = None) -> None:
     print("RAGAS 三个分数是 DeepSeek 当评审给的模型判断。")
 
 
+# ---------------------------------------------------------------- 单元14：ReAct Agent
+
+
+def demo_react_agent(argument: str | None = None) -> None:
+    """单元14：单事项 → 双事项 → 限轮次，最后做轨迹对比。
+
+    三种用法对应任务卡的三段时间：不带参数单事项、`double` 双事项、`limit` 轮次受限；
+    `demo` 一口气跑完三段（课件截图与证据脚本都用这条）。
+    """
+    try:
+        from app.agent_lab import (
+            DEFAULT_MAX_STEPS,
+            DOUBLE_QUESTION,
+            LIMITED_MAX_STEPS,
+            SINGLE_QUESTION,
+            build_agent,
+            render_run,
+            render_scenario,
+            render_why_python,
+            run_class,
+            run_scenario,
+        )
+    except ImportError as exc:
+        print(
+            f"单元14 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma --extra parse"
+        )
+        return
+
+    payload = (argument or "").strip()
+    command, _, rest = payload.partition(" ")
+    command = command.lower()
+    question = rest.strip()
+
+    if command == "demo":
+        try:
+            run = run_class()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"Agent 未执行：{error}")
+            return
+        print(render_run(run))
+        print()
+        print("限制轮次只改变停在哪一轮，不改变模型会不会多查一次——那是成本约束，不是质量信号。")
+        return
+
+    # 三种场景都先准备好库与决策模型，之后只换问题与轮次上限。
+    try:
+        agent, store, count = build_agent(DEFAULT_MAX_STEPS)
+    except (ImportError, RuntimeError, ValueError) as error:
+        print(f"Agent 未执行：{error}")
+        return
+
+    is_scripted = type(agent.decision_model).__name__ == "ScriptedDecisionModel"
+    print(f"知识库 {count} 条（来自单元12 的本组资料）；决策模型：{type(agent.decision_model).__name__}")
+    if is_scripted:
+        print()
+        print("提示：当前 LLM_PROVIDER=mock，用的是离线脚本策略，")
+        print("     它的动作按“逐项检索、检索完汇总”写死，不代表模型真实推理；")
+        print("     想看真实 DeepSeek 的决策，在 .env 里把 LLM_PROVIDER 改成 deepseek。")
+
+    if command == "double":
+        scenario, *_ = run_scenario("double", question or DOUBLE_QUESTION, DEFAULT_MAX_STEPS, agent=agent)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("双事项问题看的就是第 2 轮：模型只有看到第一轮观察后才会决定要不要再查一次。")
+        return
+    if command in ("limit", "limited", "max2"):
+        scenario, *_ = run_scenario("limited", question or DOUBLE_QUESTION, LIMITED_MAX_STEPS, agent=agent)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print(render_why_python())
+        return
+    # command 不是保留字时，整段 payload 就是用户自己的问题。
+    scenario, *_ = run_scenario("single", payload or SINGLE_QUESTION, DEFAULT_MAX_STEPS, agent=agent)
+    print()
+    print(render_scenario(scenario))
+    print()
+    print("模型每轮只输出一个 JSON 动作，检索与来源核验都在 Python 里执行；")
+    print("这也是为什么 finish 的来源必须是真的检索到的文件。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -890,6 +982,9 @@ def main() -> None:
             continue
         if command == "/eval":
             demo_evaluation(payload or None)
+            continue
+        if command == "/act":
+            demo_react_agent(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

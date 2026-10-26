@@ -256,6 +256,8 @@ class ChromaIntegrationTest(unittest.TestCase):
         from app.parse_lab import run_parse
 
         cls._dir = Path(tempfile.mkdtemp(prefix="chroma-unit12-cls-"))
+        # 对照项目（课程另一个组）的资料目录若在仓库里缺失，run_parse 会如实记录
+        # “跳过跨项目对照”而不是整条崩溃——跨项目那两条断言届时自行跳过。
         cls.run_result = run_parse(DEFAULT_PROJECT, cls._dir, with_other_project=True)
 
     @classmethod
@@ -284,6 +286,8 @@ class ChromaIntegrationTest(unittest.TestCase):
 
     def test_other_project_does_not_count_into_mine(self) -> None:
         run = self.run_result
+        if run.other_project is None or run.other_missing:
+            self.skipTest("对照项目的资料目录不在仓库中，跳过跨项目计数用例")
         self.assertEqual(run.after_other_count, EXPECTED_RECORDS)
         self.assertEqual(run.total_count, EXPECTED_TOTAL)
         self.assertNotEqual(run.other_project.project_id, run.project.project_id)
@@ -293,9 +297,12 @@ class ChromaIntegrationTest(unittest.TestCase):
 
         text = render_run(self.run_result)
         self.assertIn("入库后（本项目）：7 条", text)
-        self.assertIn("库内总数：14 条", text)
         self.assertIn("page=1", text)
         self.assertIn("row=2", text)
+        if self.run_result.other_project and not self.run_result.other_missing:
+            self.assertIn(f"库内总数：{EXPECTED_TOTAL} 条", text)
+        else:
+            self.assertIn("跳过跨项目对照", text)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # 电商售后服务智能体
 
-李省春小组的 Python 课堂项目。在老师发放的“项目起始模板”代码骨架之上，已按电商任务卡实现第 02—10 单元：多轮对话与流式输出、Prompt 模板与同题对比、订单工具调用闭环、工具注册表与调度器、售后文本向量化与相似度排序、向量库选型与 Chroma 空集合建库、售后资料批量写入与项目内检索、可复用检索服务（Top-K／来源过滤／批量）、RAG 问答闭环（无证据拒答／编号上下文／真实生成／引用核验）。所有数据均为课程虚构样例，只读，不接真实电商系统。
+李省春小组的 Python 课堂项目。在老师发放的“项目起始模板”代码骨架之上，已按电商任务卡实现第 02—14 单元：多轮对话与流式输出、Prompt 模板与同题对比、订单工具调用闭环、工具注册表与调度器、售后文本向量化与相似度排序、向量库选型与 Chroma 空集合建库、售后资料批量写入与项目内检索、可复用检索服务（Top-K／来源过滤／批量）、RAG 问答闭环（无证据拒答／编号上下文／真实生成／引用核验）、检索侧优化（重叠分块与本地重排）、多格式知识库解析、RAG 评估与监控（两类指标 + SQLite 日志），以及 ReAct Agent（模型提动作、Python 执行检索、观察回填对话、max_steps 控制停止）。所有数据均为课程虚构样例，只读，不接真实电商系统。
 
 ## 在 Trae 中打开
 
@@ -20,6 +20,10 @@ uv run python scripts/generate_evidence_unit07.py
 uv run python scripts/generate_evidence_unit08.py
 uv run python scripts/generate_evidence_unit09.py
 uv run python scripts/generate_evidence_unit10.py
+uv run python scripts/generate_evidence_unit11.py
+uv run python scripts/generate_evidence_unit12.py
+uv run python scripts/generate_evidence_unit13.py
+uv run python scripts/generate_evidence_unit14.py
 ```
 
 `--extra embedding`（单元06 向量模型）与 `--extra chroma`（单元07—10 向量库）都是可选依赖。只跑单元 02—05 时 `uv sync` 即可，其余命令不受影响。
@@ -45,6 +49,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 单元12 换了个方向：不问答，只解决「三种格式怎么变成同一种记录」。资料在 `模拟数据/单元12项目资料/`，两组各 3 篇 Markdown + 1 份 PDF + 1 份 CSV（本组 7 条、对照项目 7 条）。命令是 `/parse [项目]`（`ecom` 默认、`travel`）：Markdown 整篇一条（`document`）、PDF 每页一条（`page`）、CSV 每行一条（`row`，行号从 2 起），全部带上 `project_id` / `source` / `location` 后写进独立库 `.chroma_unit12/` 的**同一个集合**；再从数据库回读 PDF 第 1 页与 CSV 第 2 行，重跑验证条数不增长，最后切到另一个项目——库内 14 条，但按 `project_id` 数仍然各 7 条。**两个项目写在同一集合里，隔离靠元数据过滤，不靠分库。** PDF 解析要装 `pypdf`：`uv sync --extra parse`。
 
 单元13 给前面所有单元装上"尺子"：用独立库 `.chroma_unit13/` 装载本组资料，对根目录 `evaluation_cases.json` 里的 3 道评估题跑完整闭环——**检索与回答复用单元09/10**（不重写检索），本单元只加两类打分与落库。命令是 `/eval`（跑完 3 题）、`/eval 1`（先跑 1 题确认，对应任务卡的 `main.py --limit 1`）、`/eval summary`（汇总均值与反馈）、`/eval feedback 日志ID good|bad`（给单题打标记）。两类指标必须分开看：`Precision@3` / `Recall@3` 是**规则算的**（比对人工标注的来源文件，零模型调用；Recall 按去重来源算，重复片段不虚增覆盖率）;`Context Precision` / `Context Recall` / `Faithfulness` 是 **DeepSeek 当评审给的模型判断**。日志落在本地 `rag_monitor.sqlite3` 的 `rag_logs` 表（九列：ID、时间、题号、问题、Precision、Recall、RAGAS、耗时、反馈），会话结束后可复盘。RAGAS 评审要装 `ragas`：`uv sync --extra evaluation`（须 0.4.3 及以上，0.3.x 与新版 langchain-community 冲突）。
+
+单元14 让前面攒下来的能力第一次在同一个循环里协作：复用单元12 的本组资料与单元09 的检索服务，但这次**轮次由模型决定**——每轮它只输出一个 JSON 动作（search_knowledge / finish），Python 校验白名单后真正去检索，再把结果以「工具观察：」回填对话，让模型据此决定是否再查一轮。命令是 `/act [问题]`（单事项）、`/act double`（双事项，看第二轮 query 怎么被改写）、`/act limit`（`max_steps=2` 重跑，看未完成的停止状态）、`/act demo`（按任务卡顺序跑完三段并做轨迹对比）。资料装进独立库 `.chroma_unit14/` 的集合 `after_sale_agent_knowledge`。**限制轮次只改变停在哪一轮**：耗尽时 `stop_reason=max_steps`、答案为空，且不会再偷偷多问一次模型；那时的观察片段不是答案。`LLM_PROVIDER=mock` 时会换成离线脚本策略（动作按“逐项检索、检索完汇总”写死），方便零成本看轨迹形状——但它的答复由真实检索片段拼成，不编造政策。
 
 默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit13/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
 
@@ -75,6 +81,11 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 /eval [参数]    单元13：评估闭环——检索/回答/两类指标/SQLite 日志/反馈/汇总
                 不带参数跑完 3 题；/eval 1 只跑 1 题；/eval summary 看汇总；
                 /eval feedback 2 bad 给第 2 条日志打反馈
+/act [参数]     单元14：ReAct——模型提动作，Python 执行真实检索
+                不带参数用单事项问题；/act 你的问题 自定义问题；
+                /act double 跑双事项问题（观察第二轮检索）；
+                /act limit 用 max_steps 2 重跑（看未完成的停止状态）；
+                /act demo 按任务卡顺序跑完三段并做轨迹对比
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -94,6 +105,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 `/parse` 是单元12 的解析入口：`parse_file()` 按后缀分三支（`.md` 整篇 / `.pdf` 逐页 / `.csv` 逐行），出口统一成 `KnowledgeRecord`，上层完全不知道资料原来是什么格式。稳定 ID = `项目:文件名:位置类型:位置`，所以重跑是更新而不是追加。回读用 `read_record()`（`collection.get(ids=...)`），证明原文与元数据真的落了盘。**坏文件不阻断整批**，逐个记录失败原因；但整批解析出 0 条会直接报错，不会静默写一个空批次。
 
 `/eval` 是单元13 的评估入口：一题走四步——检索（复用单元09 `RetrievalService`）→ 回答（复用单元10 `RAGService`）→ 打分（`retrieval_scores` 规则算 + `ragas_scores` 让 DeepSeek 当评审）→ 落库（`LogStore.record()` 写进 `rag_logs`）。**Precision@3 按条数计、Recall@3 按去重来源计**，所以同一份 CSV 的三行全命中也不会让覆盖率虚增。来源在比较前统一取路径最后一段，因为题集标注文件名、库里存相对路径。**评审调用失败写进 `error` 如实记录，绝不写假分数**；汇总时这些行不进均值。反馈只打标记、不改动已落库分数。
+
+`/act` 是单元14 的 Agent 入口：每轮模型给出一个 JSON 动作，`run()` 先校验动作在白名单里（`delete_collection` 这种提议没有对应的执行分支），再交给单元09 的检索服务真正去查（`where project_id` 在 Chroma 端过滤），命中结果回填进对话成为下一轮的上下文。**双事项问题的第 2 轮**最能说明问题：它的 query 是模型看完第一轮观察后改写的，不是把原话拆开查两遍。`max_steps` 耗尽时回报 `max_steps` 而不是假装答完——这是完成任务的比例问题，不是答案质量问题。
 
 ## 工程内容
 
@@ -124,7 +137,9 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/evaluation.py`：单元13 两类指标（规则 `retrieval_scores` + RAGAS `ragas_scores`）。
 - `app/monitoring.py`：单元13 SQLite 日志（`LogStore`：记录 / 反馈 / 汇总 / 读表）。
 - `app/eval_lab.py`：单元13 闭环编排（解析入库 → 检索回答 → 打分 → 落库 → 反馈 → 汇总）。
-- `tests/`：单元01—13 单元测试，251 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`）。
+- `app/agent.py`：单元14 ReAct 循环（`ReActAgent` / `AgentStep` / `AgentResult`、DeepSeek 与离线脚本两种决策模型）。
+- `app/agent_lab.py`：单元14 流水线编排（装资料 → 单/双/限轮次三个场景 → 轨迹对比 → 渲染）。
+- `tests/`：单元01—14 单元测试，291 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -135,6 +150,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元11验收证据.md`：单元11 的真实运行记录（分块观察、两版召回、BGE 重排、直接证据定位、两版回答，脚本抓取）。
 - `docs/单元12验收证据.md`：单元12 的真实运行记录（解析清单、入库与回读、重跑与换项目、按项目计数、七类边界，脚本抓取）。
 - `docs/单元13验收证据.md`：单元13 的真实运行记录（题集、单题与三题闭环、rag_logs 表、反馈与汇总、指标说明、低分样例分析、边界，脚本抓取）。
+- `docs/单元14验收证据.md`：单元14 的真实运行记录（准备三件套、单事项、双事项、限轮次、轨迹对比、五条理由、六类边界，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
@@ -155,8 +171,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 ## 小组任务与日报
 
-从 [项目管理/README.md](项目管理/README.md) 查看第 01—12 单元的五人分工、提交清单、验收标准和每日记录。任务安排与实际完成情况分开记录；完成后在对应日期的日报中填写本人结果和证据链接，由组长审核。
+从 [项目管理/README.md](项目管理/README.md) 查看第 01—14 单元的五人分工、提交清单、验收标准和每日记录。任务安排与实际完成情况分开记录；完成后在对应日期的日报中填写本人结果和证据链接，由组长审核。
 
 ## 来源
 
-代码取自 `unit1.zip/项目起始模板`；电商资料取自 `unit1.zip/自选项目任务包/02-电商售后服务智能体`。`unit5.zip` 的工单与报销课堂示例属于另一个演示场景，未并入本工程。`unit6`、`unit7`、`unit8`、`unit9`、`unit10` 的做法已按电商售后语料改造后并入（语料换成 `模拟数据/sample_questions.json` 与 `模拟数据/knowledge/`，参考实现里的工单／报销语料一律不用，集合名、元数据、项目标识、检索问题与真实业务问题也一并改造）。
+代码取自 `unit1.zip/项目起始模板`；电商资料取自 `unit1.zip/自选项目任务包/02-电商售后服务智能体`。`unit5.zip` 的工单与报销课堂示例属于另一个演示场景，未并入本工程。`unit6`、`unit7`、`unit8`、`unit9`、`unit10`、`unit11`、`unit12`、`unit13`、`unit14` 的做法已按电商售后语料改造后并入（语料换成 `模拟数据/sample_questions.json` 与 `模拟数据/knowledge/`，参考实现里的工单／报销语料一律不用，集合名、元数据、项目标识、检索问题与真实业务问题也一并改造）。

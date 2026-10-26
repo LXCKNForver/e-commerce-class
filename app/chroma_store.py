@@ -67,6 +67,17 @@ UNIT13_COLLECTION_METADATA = {
     "content_source": "模拟数据/单元12项目资料/电商售后服务智能体项目组（本组 3md+1pdf+1csv）",
     "write_policy": "unit13_eval_only",
 }
+# 单元14 的 Agent 再单独用一个库：它装的是同一批本组资料，但用途变了——这里的数据要
+# 被 Agent 多轮检索"反复查询"，与单元13 那张评估现场表互不打扰，谁的复现现场都保得住。
+DEFAULT_UNIT14_DB_PATH = PROJECT_ROOT / ".chroma_unit14"
+UNIT14_COLLECTION = "after_sale_agent_knowledge"
+UNIT14_COLLECTION_METADATA = {
+    "purpose": "unit14_react_agent",
+    "embedding_model": "BAAI/bge-small-zh-v1.5",
+    "dimension": 512,
+    "content_source": "模拟数据/单元12项目资料/电商售后服务智能体项目组（本组 3md+1pdf+1csv）",
+    "write_policy": "unit14_react_demo",
+}
 
 # 项目隔离标识沿用单元07；查询必须带上它，否则会拿到别的项目的数据。
 PROJECT_ID = "e-commerce-after-sales"
@@ -120,6 +131,12 @@ def resolve_unit13_db_path() -> Path:
     """
     override = os.environ.get("CHROMA_UNIT13_DB_DIR", "").strip()
     return Path(override) if override else DEFAULT_UNIT13_DB_PATH
+
+
+def resolve_unit14_db_path() -> Path:
+    """单元14 的数据库目录：默认 `.chroma_unit14/`，可用 CHROMA_UNIT14_DB_DIR 覆盖。"""
+    override = os.environ.get("CHROMA_UNIT14_DB_DIR", "").strip()
+    return Path(override) if override else DEFAULT_UNIT14_DB_PATH
 
 
 def render_record_fields() -> str:
