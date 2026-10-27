@@ -434,6 +434,10 @@ embedding = [
 evaluation = [
     { name = "ragas" },
 ]
+langchain = [
+    { name = "langchain-core" },
+    { name = "langchain-deepseek" },
+]
 parse = [
     { name = "pypdf" },
 ]
@@ -442,12 +446,14 @@ parse = [
 requires-dist = [
     { name = "chromadb", marker = "extra == 'chroma'", specifier = ">=0.4.0" },
     { name = "fastembed", marker = "extra == 'embedding'", specifier = ">=0.9.0,<1.0" },
+    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.0,<2" },
+    { name = "langchain-deepseek", marker = "extra == 'langchain'", specifier = ">=1.0,<2" },
     { name = "openai", marker = "extra == 'deepseek'", specifier = ">=1.0.0" },
     { name = "pypdf", marker = "extra == 'parse'", specifier = ">=4.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "ragas", marker = "extra == 'evaluation'", specifier = ">=0.4.3" },
 ]
-provides-extras = ["deepseek", "embedding", "chroma", "parse", "evaluation"]
+provides-extras = ["deepseek", "embedding", "chroma", "parse", "evaluation", "langchain"]
 
 [[package]]
 name = "fastembed"
@@ -969,6 +975,19 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/64/cb/77d1dabe57d0dc0f96f65cba321366c341627295d1c09eefa58549e34391/langchain_core-1.7.0.tar.gz", hash = "sha256:c34e53358b103cd73f43c63f5f46f9b5c6c3467efdffcdf134892b89020494e4" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/b3/d8/ed130e91cee0525cb47d185b98a5a6ffd6a8b660a100fbee43d887e745d6/langchain_core-1.7.0-py3-none-any.whl", hash = "sha256:e82b24d7ac51fc74874baa29d6b3c0b8234880d4f3d897f8ff57fb80dfd9b07d" },
+]
+
+[[package]]
+name = "langchain-deepseek"
+version = "1.1.1"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "langchain-core" },
+    { name = "langchain-openai" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/1b/6d/469f03fc140d7e8974246b41d65e71a3c7a6bc9ceba2f31bd5d8b0892c6a/langchain_deepseek-1.1.1.tar.gz", hash = "sha256:94267fb5500813fa41ea4bbc8b523551cfbf58f8966ed3b91dbb8991f8bd70e5" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/5d/1b/da9b7fcdb205acf5405dc961d8edaf779eab18326938811530b3032d6803/langchain_deepseek-1.1.1-py3-none-any.whl", hash = "sha256:aec298233606b1289898543e56f90373f71e919b586f580f5e161c018ab21dcb" },
 ]
 
 [[package]]

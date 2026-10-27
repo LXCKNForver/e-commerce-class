@@ -89,6 +89,17 @@ UNIT15_COLLECTION_METADATA = {
     "content_source": "模拟数据/单元12项目资料/电商售后服务智能体项目组（本组 3md+1pdf+1csv）",
     "write_policy": "unit15_toolkit_demo",
 }
+# 单元16 的 LangChain 组合链再用一个库：装的是同一批本组资料，但这次是被 LCEL 的
+# RunnableLambda 读——与单元14/15 的 Agent 轨迹分开，三套现场各自都能复现。
+DEFAULT_UNIT16_DB_PATH = PROJECT_ROOT / ".chroma_unit16"
+UNIT16_COLLECTION = "after_sale_lcel_knowledge"
+UNIT16_COLLECTION_METADATA = {
+    "purpose": "unit16_langchain_lcel",
+    "embedding_model": "BAAI/bge-small-zh-v1.5",
+    "dimension": 512,
+    "content_source": "模拟数据/单元12项目资料/电商售后服务智能体项目组（本组 3md+1pdf+1csv）",
+    "write_policy": "unit16_lcel_demo",
+}
 
 # 项目隔离标识沿用单元07；查询必须带上它，否则会拿到别的项目的数据。
 PROJECT_ID = "e-commerce-after-sales"
@@ -158,6 +169,12 @@ def resolve_unit15_db_path() -> Path:
     """
     override = os.environ.get("CHROMA_UNIT15_DB_DIR", "").strip()
     return Path(override) if override else DEFAULT_UNIT15_DB_PATH
+
+
+def resolve_unit16_db_path() -> Path:
+    """单元16 的数据库目录：默认 `.chroma_unit16/`，可用 CHROMA_UNIT16_DB_DIR 覆盖。"""
+    override = os.environ.get("CHROMA_UNIT16_DB_DIR", "").strip()
+    return Path(override) if override else DEFAULT_UNIT16_DB_PATH
 
 
 def render_record_fields() -> str:

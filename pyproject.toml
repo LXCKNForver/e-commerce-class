@@ -15,6 +15,9 @@ parse = ["pypdf>=4.0.0"]
 # 0.4.3 起指标在 ragas.metrics.collections 下（与课程参考实现同 API），且不再依赖
 # langchain_community 的 vertexai 模块（ragas 0.3.1 配 langchain-community 0.4 会导入失败）。
 evaluation = ["ragas>=0.4.3"]
+# 单元16 LangChain 组合链用：Runnable/Prompt/Parser 在 langchain-core，
+# ChatDeepSeek 在 langchain-deepseek。两者版本要对得上（core 1.x 配 deepseek 1.x）。
+langchain = ["langchain-core>=1.0,<2", "langchain-deepseek>=1.0,<2"]
 
 [tool.uv]
 index-url = "https://mirrors.aliyun.com/pypi/simple"

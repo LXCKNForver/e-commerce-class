@@ -1,4 +1,4 @@
-"""电商售后服务智能体：单元02—13 累计入口。
+"""电商售后服务智能体：单元02—16 累计入口。
 
 单元02 流式输出与多轮对话：/chat 走纯 stream 模式，保留多轮上下文。
 单元03 Prompt工程与模板：/compare 用同一份订单数据、同一个问题对比差/好提示词。
@@ -37,6 +37,11 @@ evaluation_cases.json 里的 3 道评估题跑完整闭环——复用单元09/1
 （单元09 检索）、lookup_faq 按编号查 SQLite（本组 FAQ CSV 同步而来，只读 + 参数化
 SQL）、compute_return_deadline 用 Python 算日期（天数必须先在资料原文里查到）；
 工具名与参数先过白名单再由 Python 执行，未授权的工具与格式不对的参数在执行前被拒。
+单元16 LangChain核心：/chain 用 Runnable、Prompt、Model、Parser 把上面这些现成能力
+串成一条 LCEL 链——RunnableLambda 包住单元09 的检索（不改写它），assign 只加字段，
+所以问题、片段与来源一路都在；Prompt 规定证据边界，ChatDeepSeek 生成，
+StrOutputParser 取出字符串。同一问题再跑一遍单元15 的 ToolAgent 作对照，
+只比对来源与数字这类硬事实。原有 Agent 一行没删，新链不覆盖旧实现。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -94,6 +99,12 @@ HELP_TEXT = """可用命令：
                   /tools calc 计算工具（签收日 + 资料时限 = 截止日）；
                   /tools reject 未知工具与非法参数被拒；
                   /tools demo 按任务卡顺序跑完四段
+  /chain [参数]    单元16：LangChain LCEL 链——检索 → assign → Prompt → 模型 → Parser
+                  不带参数用本组真实问题跑一次组合链；/chain 你的问题 自定义；
+                  /chain steps 逐段打印六段的输入输出；
+                  /chain compare 同一问题对照单元15 的 ToolAgent（只比对硬事实）；
+                  /chain empty 资料不足时的处理；/chain bad 无效输入被守门拦下；
+                  /chain demo 按任务卡四节课顺序跑完一遍
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -985,6 +996,110 @@ def demo_toolkit(argument: str | None = None) -> None:
     print("模型每轮只输出一个 JSON 工具调用，工具名与参数先过白名单，再由 Python 执行。")
 
 
+# ---------------------------------------------------------------- 单元16：LangChain 组合链
+
+
+def demo_chain(argument: str | None = None) -> None:
+    """单元16：组合链 → 逐段流转 → 同题对照 → 资料不足与无效输入。
+
+    子命令对应任务卡的四节课：不带参数跑组合链（第3节）、`steps` 看逐段流转（第1、2节）、
+    `compare` 同题对照单元15 的 ToolAgent、`empty`/`bad` 看异常场景（第4节）、
+    `demo` 按课堂顺序一次跑完。
+    """
+    try:
+        from app.chain_lab import (
+            DEFAULT_QUESTION,
+            INSUFFICIENT_QUESTION,
+            build_stack,
+            compare_with_agent,
+            render_comparison,
+            render_invalid,
+            render_reusable,
+            render_run,
+            render_scenario,
+            run_class,
+            run_invalid,
+            run_scenario,
+        )
+        from app.lc_chain import MIN_SIMILARITY, render_stage_table
+    except ImportError as exc:
+        print(
+            f"单元16 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma --extra langchain"
+        )
+        return
+
+    payload = (argument or "").strip()
+    command, _, rest = payload.partition(" ")
+    command = command.lower()
+    question = rest.strip()
+
+    if command == "demo":
+        try:
+            run = run_class()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"组合链未执行：{error}")
+            return
+        print(render_run(run))
+        print()
+        print("六段里只有第⑤段是模型，其余五段都是 Python：检索、字段、提示词、解析各管一头；")
+        print("所以换模型只是换第⑤段，资料和来源口径一点没变。")
+        return
+
+    try:
+        from app.chroma_store import PROJECT_ID
+
+        parts, service, store = build_stack()
+    except (ImportError, RuntimeError, ValueError) as error:
+        print(f"组合链未执行：{error}")
+        return
+
+    print(f"知识库 {store.count(PROJECT_ID)} 条；证据门槛 余弦相似度 ≥ {MIN_SIMILARITY}；"
+          f"模型：{parts.model.model_name if hasattr(parts.model, 'model_name') else type(parts.model).__name__}")
+    if type(parts.model).__name__ == "OfflineChatModel":
+        print()
+        print("提示：当前 LLM_PROVIDER=mock，链上第⑤段用的是离线摘抄模型——")
+        print("     它只把证据原文抄进答案，不代表模型的真实生成能力；改 .env 的 LLM_PROVIDER 可看真实回答。")
+
+    if command in ("steps", "stage", "flow"):
+        scenario = run_scenario("steps", question or DEFAULT_QUESTION, parts, inspect_stages=True)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print(render_stage_table())
+        print()
+        print("assign 是加字段、不是换值：问题一路都在，所以最后还能把来源一并打印出来。")
+        return
+    if command in ("compare", "cmp"):
+        comparison = compare_with_agent(question or DEFAULT_QUESTION, parts, service)
+        print()
+        print(render_comparison(comparison))
+        print()
+        print("对照的是来源和时限数字这类硬事实；模型措辞不同不算问题，数字不同才要人工核对。")
+        return
+    if command in ("empty", "insufficient", "lack"):
+        scenario = run_scenario("empty", question or INSUFFICIENT_QUESTION, parts)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("证据不足时链照样跑完，但递给模型的是「未检索到相关资料」——答案只能是资料不足。")
+        return
+    if command in ("bad", "invalid"):
+        print()
+        print(render_invalid(run_invalid(parts)))
+        print()
+        print("守门在链之前：问题不合格就不检索、不调用模型，链一次都没跑。")
+        return
+
+    scenario = run_scenario("answer", payload or DEFAULT_QUESTION, parts)
+    print()
+    print(render_scenario(scenario))
+    print()
+    print(render_reusable())
+    print()
+    print("链只是把已有能力串起来：检索还是单元09 的那个函数，资料还是单元12 的那批真实文件。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -1089,6 +1204,9 @@ def main() -> None:
             continue
         if command == "/tools":
             demo_toolkit(payload or None)
+            continue
+        if command == "/chain":
+            demo_chain(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]
