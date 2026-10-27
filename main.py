@@ -33,6 +33,10 @@ evaluation_cases.json 里的 3 道评估题跑完整闭环——复用单元09/1
 单元14 ReAct Agent：/act 让模型只提动作、由 Python 执行真实检索——复用单元09 的
 检索服务和单元12 的本组资料（独立库 .chroma_unit14/），逐轮打印决策、动作、观察，
 再用 max_steps 2 重跑同一道复杂题，对比 finished 与 max_steps 两种停止状态。
+单元15 Agent 工具集：/tools 把能力拆成三项只读工具——search_knowledge 查 Chroma
+（单元09 检索）、lookup_faq 按编号查 SQLite（本组 FAQ CSV 同步而来，只读 + 参数化
+SQL）、compute_return_deadline 用 Python 算日期（天数必须先在资料原文里查到）；
+工具名与参数先过白名单再由 Python 执行，未授权的工具与格式不对的参数在执行前被拒。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -84,6 +88,12 @@ HELP_TEXT = """可用命令：
                   /act double 跑双事项问题（观察第二轮检索）；
                   /act limit 用 max_steps 2 重跑（看未完成的停止状态）；
                   /act demo 按任务卡顺序跑完三段并做轨迹对比
+  /tools [参数]    单元15：Agent 工具集——三项只读工具 + 白名单
+                  不带参数跑单工具（FAQ 按编号查）；/tools 你的问题 自定义；
+                  /tools combo 组合问题（观察连续调用两个工具）；
+                  /tools calc 计算工具（签收日 + 资料时限 = 截止日）；
+                  /tools reject 未知工具与非法参数被拒；
+                  /tools demo 按任务卡顺序跑完四段
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -884,6 +894,97 @@ def demo_react_agent(argument: str | None = None) -> None:
     print("这也是为什么 finish 的来源必须是真的检索到的文件。")
 
 
+# ---------------------------------------------------------------- 单元15：Agent 工具集
+
+
+def demo_toolkit(argument: str | None = None) -> None:
+    """单元15：单工具 → 连续调用 → 拒绝路径 → 计算工具。
+
+    子命令对应任务卡的四段时间：不带参数单工具、`combo` 连续调用、
+    `reject` 拒绝路径、`calc` 计算工具；`demo` 按课堂顺序一次跑完四段。
+    """
+    try:
+        from app.tool_agent import DEFAULT_MAX_STEPS
+        from app.tool_lab import (
+            CALC_QUESTION,
+            COMBO_QUESTION,
+            SINGLE_QUESTION,
+            build_kit,
+            render_calc_note,
+            render_run,
+            render_scenario,
+            run_class,
+            run_scenario,
+        )
+    except ImportError as exc:
+        print(
+            f"单元15 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma --extra parse"
+        )
+        return
+
+    payload = (argument or "").strip()
+    command, _, rest = payload.partition(" ")
+    command = command.lower()
+    question = rest.strip()
+
+    if command == "demo":
+        try:
+            run = run_class()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"工具集未执行：{error}")
+            return
+        print(render_run(run))
+        print()
+        print("三个工具各管一类数据：检索靠相似度、FAQ 靠编号、日期靠 Python 算；")
+        print("模型只提议调哪个，能不能执行永远由注册表说了算。")
+        return
+
+    # 其余子命令共用同一套数据源与决策模型，只换问题。
+    try:
+        agent, _registry, _store, kb_count, faq_rows = build_kit()
+    except (ImportError, RuntimeError, ValueError) as error:
+        print(f"工具集未执行：{error}")
+        return
+
+    print(f"知识库 {kb_count} 条；FAQ 库 {faq_rows} 行；"
+          f"决策模型：{type(agent.decision_model).__name__}")
+    if type(agent.decision_model).__name__ == "ScriptedToolModel":
+        print()
+        print("提示：当前 LLM_PROVIDER=mock，用的是离线脚本策略（先查编号、再查制度、")
+        print("     算之前先取时限），不代表模型真实推理；改 .env 里的 LLM_PROVIDER 可看真实决策。")
+
+    if command in ("combo", "combine"):
+        scenario, *_ = run_scenario("combo", question or COMBO_QUESTION, DEFAULT_MAX_STEPS, agent=agent)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("连续调用看的是第 2 轮：模型看到第 1 轮的观察后，才决定换另一个工具。")
+        return
+    if command in ("calc", "compute"):
+        scenario, *_ = run_scenario("calc", question or CALC_QUESTION, DEFAULT_MAX_STEPS, agent=agent)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print(render_calc_note())
+        return
+    if command in ("reject", "rebel"):
+        from app.tool_lab import run_rejections
+
+        scenario = run_rejections(agent, DEFAULT_MAX_STEPS)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("拒绝发生在执行之前：未授权的工具和格式不对的参数，永远不会碰到数据。")
+        return
+    # command 不是保留字时，整段 payload 就是用户自己的问题。
+    scenario, *_ = run_scenario("single", payload or SINGLE_QUESTION, DEFAULT_MAX_STEPS, agent=agent)
+    print()
+    print(render_scenario(scenario))
+    print()
+    print("模型每轮只输出一个 JSON 工具调用，工具名与参数先过白名单，再由 Python 执行。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -985,6 +1086,9 @@ def main() -> None:
             continue
         if command == "/act":
             demo_react_agent(payload or None)
+            continue
+        if command == "/tools":
+            demo_toolkit(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

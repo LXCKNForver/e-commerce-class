@@ -1,6 +1,6 @@
 # 电商售后服务智能体
 
-李省春小组的 Python 课堂项目。在老师发放的“项目起始模板”代码骨架之上，已按电商任务卡实现第 02—14 单元：多轮对话与流式输出、Prompt 模板与同题对比、订单工具调用闭环、工具注册表与调度器、售后文本向量化与相似度排序、向量库选型与 Chroma 空集合建库、售后资料批量写入与项目内检索、可复用检索服务（Top-K／来源过滤／批量）、RAG 问答闭环（无证据拒答／编号上下文／真实生成／引用核验）、检索侧优化（重叠分块与本地重排）、多格式知识库解析、RAG 评估与监控（两类指标 + SQLite 日志），以及 ReAct Agent（模型提动作、Python 执行检索、观察回填对话、max_steps 控制停止）。所有数据均为课程虚构样例，只读，不接真实电商系统。
+李省春小组的 Python 课堂项目。在老师发放的“项目起始模板”代码骨架之上，已按电商任务卡实现第 02—15 单元：多轮对话与流式输出、Prompt 模板与同题对比、订单工具调用闭环、工具注册表与调度器、售后文本向量化与相似度排序、向量库选型与 Chroma 空集合建库、售后资料批量写入与项目内检索、可复用检索服务（Top-K／来源过滤／批量）、RAG 问答闭环（无证据拒答／编号上下文／真实生成／引用核验）、检索侧优化（重叠分块与本地重排）、多格式知识库解析、RAG 评估与监控（两类指标 + SQLite 日志），以及 ReAct Agent（模型提动作、Python 执行检索、观察回填对话、max_steps 控制停止）与 Agent 工具集（三项只读工具 + 白名单 + 结构化查询 + 计算工具）。所有数据均为课程虚构样例，只读，不接真实电商系统。
 
 ## 在 Trae 中打开
 
@@ -24,6 +24,7 @@ uv run python scripts/generate_evidence_unit11.py
 uv run python scripts/generate_evidence_unit12.py
 uv run python scripts/generate_evidence_unit13.py
 uv run python scripts/generate_evidence_unit14.py
+uv run python scripts/generate_evidence_unit15.py
 ```
 
 `--extra embedding`（单元06 向量模型）与 `--extra chroma`（单元07—10 向量库）都是可选依赖。只跑单元 02—05 时 `uv sync` 即可，其余命令不受影响。
@@ -52,7 +53,9 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元14 让前面攒下来的能力第一次在同一个循环里协作：复用单元12 的本组资料与单元09 的检索服务，但这次**轮次由模型决定**——每轮它只输出一个 JSON 动作（search_knowledge / finish），Python 校验白名单后真正去检索，再把结果以「工具观察：」回填对话，让模型据此决定是否再查一轮。命令是 `/act [问题]`（单事项）、`/act double`（双事项，看第二轮 query 怎么被改写）、`/act limit`（`max_steps=2` 重跑，看未完成的停止状态）、`/act demo`（按任务卡顺序跑完三段并做轨迹对比）。资料装进独立库 `.chroma_unit14/` 的集合 `after_sale_agent_knowledge`。**限制轮次只改变停在哪一轮**：耗尽时 `stop_reason=max_steps`、答案为空，且不会再偷偷多问一次模型；那时的观察片段不是答案。`LLM_PROVIDER=mock` 时会换成离线脚本策略（动作按“逐项检索、检索完汇总”写死），方便零成本看轨迹形状——但它的答复由真实检索片段拼成，不编造政策。
 
-默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit13/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
+单元15 把「一个检索工具」换成「一套工具集」：同一份本组 CSV 有两条去路——逐行进 Chroma 靠**相似度**被找到，整表进 SQLite 靠**编号**精确命中（`app/faq_db.py`，只读 URI + 固定参数化 SQL `SELECT ... WHERE question_id = ?`）。三项只读工具按 `name` / `description` / `parameters` / `execute` 四要素注册进 `ToolRegistry`，**模型看得见的清单就是程序肯执行的清单**：`search_knowledge`（Chroma）、`lookup_faq`（SQLite）、`compute_return_deadline`（Python 日期加法）。命令是 `/tools [问题]`（单工具）、`/tools combo`（组合问题，看两个工具连着调）、`/tools calc`（计算题）、`/tools reject`（未知工具与非法参数被拒）、`/tools demo`（按任务卡顺序跑完四段）。**计算值不能由模型猜**：`window_days` 必须与资料原文里的「N天」一致（`window_days=30` 会被拒，因为 `DOC-02-01` 里没有这个写法），日期加法交给 `datetime`。未知工具、多字段、少字段、格式错、注入串全部在 `authorize_tool()` 里拦下——被拒的工具一次数据库访问都不会发生。向量库 `.chroma_unit15/`、FAQ 库 `.sqlite_unit15/faq.db`。
+
+默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit15/`、`.sqlite_unit15/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
 
 依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。
 
@@ -108,6 +111,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 `/act` 是单元14 的 Agent 入口：每轮模型给出一个 JSON 动作，`run()` 先校验动作在白名单里（`delete_collection` 这种提议没有对应的执行分支），再交给单元09 的检索服务真正去查（`where project_id` 在 Chroma 端过滤），命中结果回填进对话成为下一轮的上下文。**双事项问题的第 2 轮**最能说明问题：它的 query 是模型看完第一轮观察后改写的，不是把原话拆开查两遍。`max_steps` 耗尽时回报 `max_steps` 而不是假装答完——这是完成任务的比例问题，不是答案质量问题。
 
+`/tools` 是单元15 的工具集入口：每轮模型仍只给一个 JSON 动作，但动作从「检索」变成「从注册表里挑一个工具」，`ToolRegistry.call()` 先过白名单与参数格式再进真实业务函数。**组合问题的第 2 轮**最能说明问题：模型先按编号查 SQLite，看到观察后才换 `search_knowledge` 去检索 Chroma——两轮落在两个不同的数据源上。`compute_return_deadline` 是第三类：它不查库，只做日期加法，但天数必须先在资料原文里出现过。拒绝路径返回的 `tool_rejected` 与轮次耗尽的 `max_steps` 是两种不同的停止状态：**前者是提议没被放行（0 次调用），后者是轮次用完（有调用但没答完）**，都不能拿半途的观察当答案。
+
 ## 工程内容
 
 - `main.py`：统一入口，各单元的命令开关。
@@ -139,7 +144,11 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/eval_lab.py`：单元13 闭环编排（解析入库 → 检索回答 → 打分 → 落库 → 反馈 → 汇总）。
 - `app/agent.py`：单元14 ReAct 循环（`ReActAgent` / `AgentStep` / `AgentResult`、DeepSeek 与离线脚本两种决策模型）。
 - `app/agent_lab.py`：单元14 流水线编排（装资料 → 单/双/限轮次三个场景 → 轨迹对比 → 渲染）。
-- `tests/`：单元01—14 单元测试，291 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`）。
+- `app/faq_db.py`：单元15 结构化 FAQ 库（CSV → SQLite，只读 URI + 固定参数化 SQL）。
+- `app/toolkit.py`：单元15 三项只读工具 + 白名单校验 + 工具注册表（四要素）。
+- `app/tool_agent.py`：单元15 多工具 ReAct 循环（决策 → 放行 → 执行 → 观察 → 再决策）。
+- `app/tool_lab.py`：单元15 流水线编排（两份数据源 → 注册 → 四个场景 → 轨迹与清单渲染）。
+- `tests/`：单元01—15 单元测试，354 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -151,6 +160,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元12验收证据.md`：单元12 的真实运行记录（解析清单、入库与回读、重跑与换项目、按项目计数、七类边界，脚本抓取）。
 - `docs/单元13验收证据.md`：单元13 的真实运行记录（题集、单题与三题闭环、rag_logs 表、反馈与汇总、指标说明、低分样例分析、边界，脚本抓取）。
 - `docs/单元14验收证据.md`：单元14 的真实运行记录（准备三件套、单事项、双事项、限轮次、轨迹对比、五条理由、六类边界，脚本抓取）。
+- `docs/单元15验收证据.md`：单元15 的真实运行记录（数据源与工具清单、单工具、连续调用、拒绝路径、计算工具与取舍、九类边界，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
@@ -171,8 +181,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 ## 小组任务与日报
 
-从 [项目管理/README.md](项目管理/README.md) 查看第 01—14 单元的五人分工、提交清单、验收标准和每日记录。任务安排与实际完成情况分开记录；完成后在对应日期的日报中填写本人结果和证据链接，由组长审核。
+从 [项目管理/README.md](项目管理/README.md) 查看第 01—15 单元的五人分工、提交清单、验收标准和每日记录。任务安排与实际完成情况分开记录；完成后在对应日期的日报中填写本人结果和证据链接，由组长审核。
 
 ## 来源
 
-代码取自 `unit1.zip/项目起始模板`；电商资料取自 `unit1.zip/自选项目任务包/02-电商售后服务智能体`。`unit5.zip` 的工单与报销课堂示例属于另一个演示场景，未并入本工程。`unit6`、`unit7`、`unit8`、`unit9`、`unit10`、`unit11`、`unit12`、`unit13`、`unit14` 的做法已按电商售后语料改造后并入（语料换成 `模拟数据/sample_questions.json` 与 `模拟数据/knowledge/`，参考实现里的工单／报销语料一律不用，集合名、元数据、项目标识、检索问题与真实业务问题也一并改造）。
+代码取自 `unit1.zip/项目起始模板`；电商资料取自 `unit1.zip/自选项目任务包/02-电商售后服务智能体`。`unit5.zip` 的工单与报销课堂示例属于另一个演示场景，未并入本工程。`unit6`、`unit7`、`unit8`、`unit9`、`unit10`、`unit11`、`unit12`、`unit13`、`unit14`、`unit15` 的做法已按电商售后语料改造后并入（语料换成 `模拟数据/sample_questions.json` 与 `模拟数据/knowledge/`，参考实现里的工单／报销语料一律不用，集合名、元数据、项目标识、检索问题与真实业务问题也一并改造）。

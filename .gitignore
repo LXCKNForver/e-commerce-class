@@ -23,5 +23,8 @@ models/
 .chroma_unit13/
 # 单元14 Agent 的运行产物（本地 SQLite，装的是本组 7 条资料），不是源代码。
 .chroma_unit14/
+# 单元15 工具集的运行产物：向量库（本组 7 条资料）与结构化 FAQ 库（由 CSV 同步而来）。
+.chroma_unit15/
+.sqlite_unit15/
 # 单元13 评估日志库（每次问答写入一行），不是源代码。
 rag_monitor.sqlite3
