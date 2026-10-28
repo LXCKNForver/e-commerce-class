@@ -17,7 +17,14 @@ parse = ["pypdf>=4.0.0"]
 evaluation = ["ragas>=0.4.3"]
 # 单元16 LangChain 组合链用：Runnable/Prompt/Parser 在 langchain-core，
 # ChatDeepSeek 在 langchain-deepseek。两者版本要对得上（core 1.x 配 deepseek 1.x）。
-langchain = ["langchain-core>=1.0,<2", "langchain-deepseek>=1.0,<2"]
+# 单元17 的 Agent 执行器用 langchain.agents.create_agent（内部由 langgraph 跑图）；
+# 这两个包以前是"跟着 ragas 一起进来的"，显式写出来才不会哪天被解析掉。
+langchain = [
+    "langchain-core>=1.0,<2",
+    "langchain-deepseek>=1.0,<2",
+    "langchain>=1.4,<2",
+    "langgraph>=1.0,<2",
+]
 
 [tool.uv]
 index-url = "https://mirrors.aliyun.com/pypi/simple"

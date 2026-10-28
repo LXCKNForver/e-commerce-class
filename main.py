@@ -42,6 +42,11 @@ SQL）、compute_return_deadline 用 Python 算日期（天数必须先在资料
 所以问题、片段与来源一路都在；Prompt 规定证据边界，ChatDeepSeek 生成，
 StrOutputParser 取出字符串。同一问题再跑一遍单元15 的 ToolAgent 作对照，
 只比对来源与数字这类硬事实。原有 Agent 一行没删，新链不覆盖旧实现。
+单元17 LangChain Agents：/lcagent 把单元15 注册表里那三项只读工具包成 LangChain 的
+BaseTool，交给 create_agent 生成的执行器去跑循环——工具还是那套白名单能力（一个字没改），
+变的是"循环不再手写"。每一步的输入、输出、失败原因与耗时都留在步骤日志里，
+所以工具出错能定位到第几步；max_steps 是模型决策次数上限，触顶就收尾且不产出答案。
+同一问题再跑一遍单元15 手写的循环作对照，只比调用的工具与数字这类硬事实。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -105,6 +110,14 @@ HELP_TEXT = """可用命令：
                   /chain compare 同一问题对照单元15 的 ToolAgent（只比对硬事实）；
                   /chain empty 资料不足时的处理；/chain bad 无效输入被守门拦下；
                   /chain demo 按任务卡四节课顺序跑完一遍
+  /lcagent [参数]  单元17：LangChain Agent 执行器——同一批工具，循环交给框架跑
+                  不带参数用最小业务场景跑一次（按编号查标准答复）；
+                  /lcagent 你的问题 自定义；/lcagent combo 连续调用两个工具；
+                  /lcagent error 工具报错定位到第几步；/lcagent limit 步数上限触顶；
+                  /lcagent reject 清单外的工具（模型提了也执行不了）；
+                  /lcagent compare 同一问题对照单元15 手写的循环；
+                  /lcagent tools 看执行器配置与接入的工具；
+                  /lcagent demo 按任务卡四节课顺序跑完一遍
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -1100,6 +1113,137 @@ def demo_chain(argument: str | None = None) -> None:
     print("链只是把已有能力串起来：检索还是单元09 的那个函数，资料还是单元12 的那批真实文件。")
 
 
+# ---------------------------------------------------------------- 单元17：LangChain Agent 执行器
+
+
+def demo_lcagent(argument: str | None = None) -> None:
+    """单元17：执行器 → 连续调用 → 工具错误与步数上限 → 同题对照单元15 的循环。
+
+    子命令对应任务卡的四节课：不带参数跑最小业务场景（第2节）、`combo` 看连续调用
+    与步骤追踪（第3节）、`error`/`limit`/`reject` 看异常路径（第3、4节）、
+    `compare` 对照单元15 手写的循环、`demo` 按课堂顺序一次跑完。
+    """
+    try:
+        from app.lc_agent import render_executor
+        from app.lc_agent_lab import (
+            BAD_ARG_QUESTION,
+            COMBO,
+            LIMIT_MAX_STEPS,
+            LIMIT_QUESTION,
+            MINIMAL_QUESTION,
+            PLANS,
+            UNKNOWN_QUESTION,
+            build_stack,
+            compare_with_legacy,
+            render_comparison,
+            render_concepts,
+            render_invalid,
+            render_run,
+            render_scenario,
+            render_tool_binding,
+            run_class,
+            run_invalid,
+            run_scenario,
+        )
+    except ImportError as exc:
+        print(
+            f"单元17 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma --extra langchain"
+        )
+        return
+
+    payload = (argument or "").strip()
+    command, _, rest = payload.partition(" ")
+    command = command.lower()
+    question = rest.strip()
+
+    if command == "demo":
+        try:
+            run = run_class()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"执行器未运行：{error}")
+            return
+        print(render_run(run))
+        print()
+        print("工具还是单元15 那三项、资料还是单元12 那 7 条；换的是谁来跑循环——")
+        print("手写 while 换成了框架的执行器，每一步仍留在日志里，出错能定位到第几步。")
+        return
+
+    try:
+        executor, legacy_agent, registry, _store, kb_count, faq_rows = build_stack()
+    except (ImportError, RuntimeError, ValueError) as error:
+        print(f"执行器未运行：{error}")
+        return
+
+    if command in ("tools", "kit", "config"):
+        print()
+        print(render_executor(executor))
+        print()
+        print(render_tool_binding(registry, executor))
+        print()
+        print(render_concepts())
+        return
+
+    print(f"知识库 {kb_count} 条；FAQ 库 {faq_rows} 行；工具 {len(executor.tools)} 项；"
+          f"步数上限 {executor.max_steps}；模型：{executor.model.__class__.__name__}")
+    if executor.model.__class__.__name__ == "ScriptedToolModel":
+        print()
+        print("提示：当前 LLM_PROVIDER=mock，执行器里用的是离线剧本模型（按剧本提工具调用）——")
+        print("     它不代表模型真实的选型能力，但工具执行、步骤日志与步数上限都是真的；")
+        print("     改 .env 里的 LLM_PROVIDER 可看真实模型自己选工具。")
+
+    if command in ("combo", "combine"):
+        scenario = run_scenario("combo", question or COMBO, executor)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("第2步是在第1步的观察回来之后才发生的：这就是执行器替我们跑的循环。")
+        return
+    if command in ("error", "fail"):
+        scenario = run_scenario("error", question or BAD_ARG_QUESTION, executor,
+                                plan=PLANS["error"], scripted=True)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("报错没有让演示中断：失败原因连同步号一起回填给模型，所以能定位到第几步。")
+        return
+    if command in ("limit", "max"):
+        scenario = run_scenario("limit", question or LIMIT_QUESTION, executor,
+                                plan=PLANS["limit"], max_steps=LIMIT_MAX_STEPS, scripted=True)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("触顶就是没答完：回答为空、执行器给出上限提示，不拿它当答案用。")
+        return
+    if command in ("reject", "rebel", "unknown"):
+        scenario = run_scenario("unknown", question or UNKNOWN_QUESTION, executor,
+                                plan=PLANS["unknown"], scripted=True)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("工具清单里没有的名字，执行器根本不执行——模型只能从注册表里挑。")
+        return
+    if command in ("compare", "cmp"):
+        comparison = compare_with_legacy(question or MINIMAL_QUESTION, executor, legacy_agent)
+        print()
+        print(render_comparison(comparison))
+        print()
+        print("两条路径用的是同一批工具与同一份资料；比的是工具与数字，不是措辞。")
+        return
+    if command in ("bad", "invalid"):
+        print()
+        print(render_invalid(run_invalid()))
+        print()
+        print("守门在跑执行器之前：问题不合格就不调用模型、也不碰任何工具。")
+        return
+
+    scenario = run_scenario("minimal", payload or MINIMAL_QUESTION, executor)
+    print()
+    print(render_scenario(scenario))
+    print()
+    print("最小场景只用到一个工具：先跑通它，再往上加连续调用与异常路径。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -1207,6 +1351,9 @@ def main() -> None:
             continue
         if command == "/chain":
             demo_chain(payload or None)
+            continue
+        if command == "/lcagent":
+            demo_lcagent(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

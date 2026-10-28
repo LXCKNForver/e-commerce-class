@@ -58,6 +58,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元16 不新增业务能力，只把上面这些能力**串成一条看得见的链**：`RunnableLambda` 包住单元09 的 `search()`（检索逻辑一个字没改），`RunnablePassthrough.assign` 一路**加字段**——`hits` → `context` / `sources` → `answer`，所以一次 `invoke` 就把问题、命中片段、证据文本、来源和答案全带回来；`ChatPromptTemplate` 把「资料为空就只许回答资料不足」写进 system；`ChatDeepSeek` 是唯一调用模型的地方；`StrOutputParser` 只做 `AIMessage → str` 的类型转换。命令是 `/chain [问题]`（组合链一次跑）、`/chain steps`（逐段打印六段的输入输出）、`/chain compare`（同题对照单元15 ToolAgent）、`/chain empty`（资料不足）、`/chain bad`（无效输入）、`/chain demo`（按任务卡四节课跑完）。**对照比的是硬事实不是措辞**：两边都引用 `DOC-02-01-普通商品退货规则.md`、都得出「7天」就算一致。证据门槛（Top1 余弦相似度 ≥ 0.55）是在本组 7 条资料上实测标定的演示值，**不是正确率也不是通用阈值**，换资料必须重新标定。原有 Agent 与工具集一行没删，新链不覆盖旧实现；离线模式把第⑤段换成摘抄模型，其余五段代码一行不动。向量库 `.chroma_unit16/`。LangChain 依赖要装：`uv sync --extra langchain`。
 
+单元17 把单元15 注册表里那三项只读工具**原样包成 LangChain 的 `BaseTool`**，交给 `langchain.agents.create_agent` 生成的执行器去跑循环——工具还是那套白名单能力（一个字没改），变的是「循环不再手写」：`ToolCallLog` 把每次工具调用的输入、输出/失败原因、耗时都记下来，所以工具出错能定位到第几步；`max_steps` 是**模型决策次数**上限，触顶就收尾且不产出答案（不会拿框架那句 "Model call limits exceeded" 当回答）。命令是 `/lcagent [问题]`（最小场景一次跑）、`/lcagent combo`（连续调用两个工具）、`/lcagent error`（工具报错定位到第几步）、`/lcagent limit`（步数上限触顶）、`/lcagent reject`（清单外的工具提了也执行不了）、`/lcagent compare`（同题对照单元15 手写的循环）、`/lcagent tools`（执行器配置与工具接线）、`/lcagent demo`（按任务卡四节课跑完）。**工具清单里没有的名字执行器根本不认**：模型只能挑名字、填参数，路径、SQL、代码一概碰不到；清单外的那一步在我们自己的日志里是 **0 条**。资料与库沿用单元15（`.chroma_unit15/` + `.sqlite_unit15/`），本单元不另建库。
+
 默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit16/`、`.sqlite_unit15/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
 
 依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation --extra langchain`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。
@@ -101,6 +103,12 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
                 /chain compare 同一问题对照单元15 的 ToolAgent（只比对硬事实）；
                 /chain empty 资料不足时的处理；/chain bad 无效输入被守门拦下；
                 /chain demo 按任务卡四节课顺序跑完一遍
+/lcagent [参数]  单元17：LangChain Agent 执行器——同一批工具，循环交给框架跑
+                不带参数跑最小业务场景（按编号查标准答复）；/lcagent 你的问题 自定义；
+                /lcagent combo 连续调用两个工具；/lcagent error 工具报错定位到第几步；
+                /lcagent limit 步数上限触顶；/lcagent reject 清单外的工具；
+                /lcagent compare 对照单元15 手写的循环；/lcagent tools 执行器配置；
+                /lcagent demo 按任务卡四节课顺序跑完一遍
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -126,6 +134,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 `/chain` 是单元16 的组合链入口：链上六段里只有第⑤段是模型，其余五段都是 Python——`RunnableLambda` 取证据、`assign` 加字段、`ChatPromptTemplate` 编消息、`StrOutputParser` 取字符串。**用 `assign` 而不是管道替换**，是因为加字段才能把 `question` / `hits` / `sources` 一路留到最后；换成替换式写法，来源就只剩模型自己写的那句话，无从核对。`inspect_stages=True` 时会逐段 invoke 并记下真实输入输出，课堂上一眼能看出「问题在第②段之后一直都在」。`/chain compare` 跑的是**同一份资料、同一个检索服务**下的两条路径，比对的是来源文件名与「7天」这类硬事实——任务卡写明无需逐字比较措辞。
 
 `/tools` 是单元15 的工具集入口：每轮模型仍只给一个 JSON 动作，但动作从「检索」变成「从注册表里挑一个工具」，`ToolRegistry.call()` 先过白名单与参数格式再进真实业务函数。**组合问题的第 2 轮**最能说明问题：模型先按编号查 SQLite，看到观察后才换 `search_knowledge` 去检索 Chroma——两轮落在两个不同的数据源上。`compute_return_deadline` 是第三类：它不查库，只做日期加法，但天数必须先在资料原文里出现过。拒绝路径返回的 `tool_rejected` 与轮次耗尽的 `max_steps` 是两种不同的停止状态：**前者是提议没被放行（0 次调用），后者是轮次用完（有调用但没答完）**，都不能拿半途的观察当答案。
+
+`/lcagent` 是单元17 的执行器入口：工具还是 `/tools` 那三项，换的是循环不再手写——`build_tools()` 把注册表里的 `ToolSpec` 包成 `BaseTool`（名字、说明、参数全部来自注册表，描述里没有路径、SQL 或代码），`create_agent` 负责「决策 → 执行 → 观察 → 再决策」。**错误定位靠我们自己的 `ToolCallLog`**：框架只把提议发出去，有没有真执行、成没成以日志为准，所以清单外的工具那一步是 0 条、坏参数那一步带着步号和原因回填给模型。`max_steps` 是**模型决策次数**上限（一次决策要么提工具调用、要么给答案），触顶时 `answer` 为空、只留下执行器的上限提示。**工具报错、步数上限、清单外的工具这三个异常场景用离线剧本模型跑**（模型那一栏写着 `scripted-tool-agent`），要的是可复现的异常路径，与真实模型好不好无关——工具、白名单、日志和上限都是真的。
 
 ## 工程内容
 
@@ -164,7 +174,9 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/tool_lab.py`：单元15 流水线编排（两份数据源 → 注册 → 四个场景 → 轨迹与清单渲染）。
 - `app/lc_chain.py`：单元16 LCEL 链（六段组装、证据门槛、离线/真实模型工厂、逐段记录与渲染）。
 - `app/chain_lab.py`：单元16 流水线编排（装库 → 组链 → 四节课场景 → 同题对照 → 渲染）。
-- `tests/`：单元01—16 单元测试，412 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16 另需 `langchain`）。
+- `app/lc_agent.py`：单元17 工具适配 + 执行器 + 步骤日志（`build_tools` / `build_executor` / `run_agent` / `ToolCallLog`、离线剧本模型）。
+- `app/lc_agent_lab.py`：单元17 流水线编排（装工具 → 组执行器 → 四节课场景 → 同题对照 → 渲染）。
+- `tests/`：单元01—17 单元测试，435 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—17 另需 `langchain`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -178,6 +190,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元14验收证据.md`：单元14 的真实运行记录（准备三件套、单事项、双事项、限轮次、轨迹对比、五条理由、六类边界，脚本抓取）。
 - `docs/单元15验收证据.md`：单元15 的真实运行记录（数据源与工具清单、单工具、连续调用、拒绝路径、计算工具与取舍、九类边界，脚本抓取）。
 - `docs/单元16验收证据.md`：单元16 的真实运行记录（可复用件与资料来源、六段流转、组合链一次运行、同题对照与资料不足、换模型只换第五段、九类边界，脚本抓取）。
+- `docs/单元17验收证据.md`：单元17 的真实运行记录（执行器配置与工具接入、最小场景、连续调用与步骤追踪、工具报错/步数上限/清单外工具、同题对照旧循环、换模型不换工具、九类边界，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
