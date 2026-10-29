@@ -60,6 +60,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元17 把单元15 注册表里那三项只读工具**原样包成 LangChain 的 `BaseTool`**，交给 `langchain.agents.create_agent` 生成的执行器去跑循环——工具还是那套白名单能力（一个字没改），变的是「循环不再手写」：`ToolCallLog` 把每次工具调用的输入、输出/失败原因、耗时都记下来，所以工具出错能定位到第几步；`max_steps` 是**模型决策次数**上限，触顶就收尾且不产出答案（不会拿框架那句 "Model call limits exceeded" 当回答）。命令是 `/lcagent [问题]`（最小场景一次跑）、`/lcagent combo`（连续调用两个工具）、`/lcagent error`（工具报错定位到第几步）、`/lcagent limit`（步数上限触顶）、`/lcagent reject`（清单外的工具提了也执行不了）、`/lcagent compare`（同题对照单元15 手写的循环）、`/lcagent tools`（执行器配置与工具接线）、`/lcagent demo`（按任务卡四节课跑完）。**工具清单里没有的名字执行器根本不认**：模型只能挑名字、填参数，路径、SQL、代码一概碰不到；清单外的那一步在我们自己的日志里是 **0 条**。资料与库沿用单元15（`.chroma_unit15/` + `.sqlite_unit15/`），本单元不另建库。
 
+单元18 换的是**谁来编排**：单元16 是一条直线、单元17 让模型决定下一步，本单元把「谁先做、走哪条分支」写死在程序里——`route_question()` 用三条纯规则（`EC-FAQ-NN` 编号 / 日期+时限词 / 售后业务词）判定分支，**路由不消耗模型调用**，同样的问题永远走同一条分支；`collect_evidence()` 按分支只查其中一类资料（按编号查 SQLite / 向量检索 / 检索原文 + Python 算日期），出口统一成 `evidence` / `sources` / `has_evidence`；`RunnableBranch` 判两道条件——先看是不是 `unknown`（三条规则都没命中 → 安全兜底），再看有没有证据（低于相似度门槛 → 资料不足），两者都**不检索或检索了也不调模型**，模型只在「摘要」「润色」这两步说话。每步的输入字段、输出字段、耗时与说明都记在 `StepLog` 里（`/flow steps` 可看），所以能分清是取证据、摘要还是润色的责任。命令是 `/flow [问题]`（知识分支）、`/flow faq`、`/flow deadline`、`/flow unknown`（兜底，0 次模型调用）、`/flow empty`（有分支没证据，0 次模型调用）、`/flow routes`（流程图 + 分支规则表）、`/flow steps`、`/flow bad`、`/flow demo`（按任务卡四节课跑完）。**四条分支各配一条本组真实问题**——走不到的分支等于没实现；兜底话术只说明「没接住」并转人工，不猜、不编。资料与工具仍是单元12/15 那一套（`.chroma_unit15/` + `.sqlite_unit15/`），本单元不另建库。
+
 默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit16/`、`.sqlite_unit15/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
 
 依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation --extra langchain`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。
@@ -109,6 +111,12 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
                 /lcagent limit 步数上限触顶；/lcagent reject 清单外的工具；
                 /lcagent compare 对照单元15 手写的循环；/lcagent tools 执行器配置；
                 /lcagent demo 按任务卡四节课顺序跑完一遍
+/flow [参数]     单元18：Chain 编排——路由 → 取证据 → 分支 → 摘要 → 润色
+                不带参数跑知识分支；/flow 你的问题 自定义；/flow faq 按编号精确查；
+                /flow deadline 查时限再算截止日期；/flow unknown 兜底（0 次模型调用）；
+                /flow empty 有分支没证据（0 次模型调用）；/flow routes 流程图与分支规则表；
+                /flow steps 逐段打印每步的输入输出；/flow bad 无效输入被守门拦下；
+                /flow demo 按任务卡四节课顺序跑完一遍
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -136,6 +144,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 `/tools` 是单元15 的工具集入口：每轮模型仍只给一个 JSON 动作，但动作从「检索」变成「从注册表里挑一个工具」，`ToolRegistry.call()` 先过白名单与参数格式再进真实业务函数。**组合问题的第 2 轮**最能说明问题：模型先按编号查 SQLite，看到观察后才换 `search_knowledge` 去检索 Chroma——两轮落在两个不同的数据源上。`compute_return_deadline` 是第三类：它不查库，只做日期加法，但天数必须先在资料原文里出现过。拒绝路径返回的 `tool_rejected` 与轮次耗尽的 `max_steps` 是两种不同的停止状态：**前者是提议没被放行（0 次调用），后者是轮次用完（有调用但没答完）**，都不能拿半途的观察当答案。
 
 `/lcagent` 是单元17 的执行器入口：工具还是 `/tools` 那三项，换的是循环不再手写——`build_tools()` 把注册表里的 `ToolSpec` 包成 `BaseTool`（名字、说明、参数全部来自注册表，描述里没有路径、SQL 或代码），`create_agent` 负责「决策 → 执行 → 观察 → 再决策」。**错误定位靠我们自己的 `ToolCallLog`**：框架只把提议发出去，有没有真执行、成没成以日志为准，所以清单外的工具那一步是 0 条、坏参数那一步带着步号和原因回填给模型。`max_steps` 是**模型决策次数**上限（一次决策要么提工具调用、要么给答案），触顶时 `answer` 为空、只留下执行器的上限提示。**工具报错、步数上限、清单外的工具这三个异常场景用离线剧本模型跑**（模型那一栏写着 `scripted-tool-agent`），要的是可复现的异常路径，与真实模型好不好无关——工具、白名单、日志和上限都是真的。
+
+`/flow` 是单元18 的编排入口：**步骤由程序写死，模型只负责「摘要」和「润色」两步**。路由 `route_question()` 是纯函数（三条正则按优先级判：`EC-FAQ-NN` → 日期+时限词 → 售后业务词 → 兜底），所以同样的问题永远同一条分支、且不消耗模型调用；`collect_evidence()` 按分支只查其中一类资料，出口统一成同一个 `EvidencePack`。`RunnableBranch` 判两道条件：`unknown` 先兜底（**不检索、不调模型**），无证据再兜底（检索了但过不了门槛，同样**0 次模型调用**）。**「未知类型」是一条正常分支而不是异常处理**——所以知识分支刻意只收 19 个售后业务词、不收「什么/怎么」，否则任何闲聊都能被它吃掉、兜底永远走不到。每步的输入字段、输出字段、耗时与说明都进 `StepLog`，字段数逐级上涨（只加不改），出问题能分清是取证据、摘要还是润色的责任；摘要单独成一步是为了这个可归因性，合并成一次调用更省但说不清。日期分支里「N天」必须来自资料原文、日期加法由 Python 做（`compute_return_deadline` 会核对原文），日期不合法或资料没写天数一律判无证据、不让模型口算。
 
 ## 工程内容
 
@@ -176,7 +186,9 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/chain_lab.py`：单元16 流水线编排（装库 → 组链 → 四节课场景 → 同题对照 → 渲染）。
 - `app/lc_agent.py`：单元17 工具适配 + 执行器 + 步骤日志（`build_tools` / `build_executor` / `run_agent` / `ToolCallLog`、离线剧本模型）。
 - `app/lc_agent_lab.py`：单元17 流水线编排（装工具 → 组执行器 → 四节课场景 → 同题对照 → 渲染）。
-- `tests/`：单元01—17 单元测试，435 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—17 另需 `langchain`）。
+- `app/flow_chain.py`：单元18 路由 + 取证据 + 条件分支 + 步骤日志（`route_question` / `collect_evidence` / `build_workflow` / `StepLog`、离线编排模型）。
+- `app/flow_lab.py`：单元18 流水线编排（装资料与工具 → 组工作流 → 五条路径逐条验证 → 横向对照表）。
+- `tests/`：单元01—18 单元测试，469 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—18 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -191,6 +203,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元15验收证据.md`：单元15 的真实运行记录（数据源与工具清单、单工具、连续调用、拒绝路径、计算工具与取舍、九类边界，脚本抓取）。
 - `docs/单元16验收证据.md`：单元16 的真实运行记录（可复用件与资料来源、六段流转、组合链一次运行、同题对照与资料不足、换模型只换第五段、九类边界，脚本抓取）。
 - `docs/单元17验收证据.md`：单元17 的真实运行记录（执行器配置与工具接入、最小场景、连续调用与步骤追踪、工具报错/步数上限/清单外工具、同题对照旧循环、换模型不换工具、九类边界，脚本抓取）。
+- `docs/单元18验收证据.md`：单元18 的真实运行记录（资料与工具清单、流程与分支规则、路由逐条验、三条分支各跑一次、每步输入输出、兜底/无证据/无效输入、五条路径对照、换模型不换编排、六类边界，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。

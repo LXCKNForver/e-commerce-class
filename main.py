@@ -47,6 +47,11 @@ BaseTool，交给 create_agent 生成的执行器去跑循环——工具还是�
 变的是"循环不再手写"。每一步的输入、输出、失败原因与耗时都留在步骤日志里，
 所以工具出错能定位到第几步；max_steps 是模型决策次数上限，触顶就收尾且不产出答案。
 同一问题再跑一遍单元15 手写的循环作对照，只比调用的工具与数字这类硬事实。
+单元18 Chain编排：/flow 把"先路由、再取证据、再摘要、再润色"编成一条带条件分支的
+工作流——路由用编号/日期/业务词三条规则（不调模型），四条分支各配一条本组真实问题，
+分支到了但没证据、以及三条规则都没命中的问题，一律走兜底：不检索、不调模型、不编答案。
+每一步的输入字段、输出字段与耗时都记在步骤表里，所以"哪一步出的问题"看得见。
+资料与工具仍是单元12/15 那一套，本单元只换"谁来编排"。
 
 直接输入问题 = 工具闭环模式（这是本项目跑通业务闭环的主路径）。
 """
@@ -118,6 +123,14 @@ HELP_TEXT = """可用命令：
                   /lcagent compare 同一问题对照单元15 手写的循环；
                   /lcagent tools 看执行器配置与接入的工具；
                   /lcagent demo 按任务卡四节课顺序跑完一遍
+  /flow [参数]     单元18：Chain 编排——路由 → 取证据 → 分支 → 摘要 → 润色
+                  不带参数跑知识分支（本组真实问题）；/flow 你的问题 自定义；
+                  /flow faq 按 FAQ 编号精确查；/flow deadline 查时限再算截止日期；
+                  /flow unknown 未命中分支 → 安全兜底（0 次模型调用）；
+                  /flow empty 分支到了但没证据 → 资料不足（0 次模型调用）；
+                  /flow routes 看流程图与分支规则表；
+                  /flow steps 同一问题逐段打印每步的输入输出；
+                  /flow bad 无效输入被守门拦下；/flow demo 按四节课顺序跑完一遍
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -1244,6 +1257,130 @@ def demo_lcagent(argument: str | None = None) -> None:
     print("最小场景只用到一个工具：先跑通它，再往上加连续调用与异常路径。")
 
 
+def demo_flow(argument: str | None = None) -> None:
+    """单元18：路由分支 → 取证据 → 摘要润色 → 兜底；每步输入输出都打印出来。
+
+    子命令对应任务卡的四节课：`routes` 看流程图与分支规则（第1、2节）、
+    不带参数跑最小业务场景（第2节）、`steps` 逐段看每步输入输出（第3节）、
+    `faq`/`deadline`/`unknown`/`empty`/`bad` 逐条验证分支与兜底（第4节）。
+    """
+    try:
+        from app.flow_chain import render_concepts, render_flow, render_routes
+        from app.flow_lab import (
+            DEADLINE_QUESTION,
+            FAQ_QUESTION,
+            NO_EVIDENCE_QUESTION,
+            UNKNOWN_QUESTION,
+            build_stack,
+            render_scenario,
+            render_summary_table,
+            run_class,
+            run_invalid,
+            run_scenario,
+        )
+    except ImportError as exc:
+        print(
+            f"单元18 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma --extra langchain"
+        )
+        return
+
+    payload = (argument or "").strip()
+    command, _, rest = payload.partition(" ")
+    command = command.lower()
+    question = rest.strip()
+
+    if command == "demo":
+        try:
+            run = run_class()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"工作流未运行：{error}")
+            return
+        print(render_flow())
+        print()
+        print(render_routes())
+        print()
+        for scenario in run.scenarios:
+            print(render_scenario(scenario))
+            print()
+        print(render_summary_table(run))
+        print()
+        print("资料还是单元12 那 7 条、工具还是单元15 那三项；换的是编排——")
+        print("谁先做、走哪条分支由程序写死，模型只负责摘要与润色这两步。")
+        return
+
+    try:
+        parts, _registry, _service, kb_count, faq_rows = build_stack()
+    except (ImportError, RuntimeError, ValueError) as error:
+        print(f"工作流未运行：{error}")
+        return
+
+    if command in ("routes", "branches", "config"):
+        print()
+        print(render_flow())
+        print()
+        print(render_routes())
+        print()
+        print(render_concepts())
+        return
+
+    model_steps = getattr(parts.summary_chain, "steps", [])
+    model_name = type(model_steps[1]).__name__ if len(model_steps) >= 2 else "（未知）"
+    print(f"知识库 {kb_count} 条；FAQ 库 {faq_rows} 行；模型：{model_name}")
+    print("提示：LLM_PROVIDER=mock 时摘要与润色由离线模型完成（只摘录证据，不生成新事实）；")
+    print("     路由、分支判断、兜底与步骤表都不依赖模型，离线与真实模式完全一致。")
+
+    if command in ("faq", "id"):
+        scenario = run_scenario("faq", question or FAQ_QUESTION, parts)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("按编号命中一行就走人：这条路不问向量库，也不会被相似度门槛卡住。")
+        return
+    if command in ("deadline", "calc", "date"):
+        scenario = run_scenario("deadline", question or DEADLINE_QUESTION, parts)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("天数来自资料原文，日期加法由 Python 做：模型只写摘要，不参与算日子。")
+        return
+    if command in ("unknown", "fallback", "reject"):
+        scenario = run_scenario("unknown", question or UNKNOWN_QUESTION, parts)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("三条规则都没命中就不猜：不检索、不调模型（模型调用 0 次），固定话术转人工。")
+        return
+    if command in ("empty", "noevidence", "insufficient"):
+        scenario = run_scenario("no_evidence", question or NO_EVIDENCE_QUESTION, parts)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("分支到了但证据过不了门槛：同样 0 次模型调用，不拿最近邻硬凑答案。")
+        return
+    if command in ("bad", "invalid"):
+        print()
+        print("输入\t结果")
+        for label, verdict in run_invalid(parts):
+            print(f"{label}\t{verdict}")
+        print()
+        print("守门在跑工作流之前：问题不合格就既不检索、也不调模型。")
+        return
+    if command in ("steps", "trace"):
+        scenario = run_scenario("knowledge", question or "普通商品退货有哪些要求？", parts)
+        print()
+        print(render_scenario(scenario))
+        print()
+        print("步骤表就是「每步输入输出可查看」这条标准的证据：几步、花了多久、为什么这么判。")
+        return
+
+    scenario = run_scenario("knowledge", payload or "普通商品退货有哪些要求？", parts)
+    print()
+    print(render_scenario(scenario))
+    print()
+    print("最小场景先跑通一条分支，再往上加分支、兜底与异常路径。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -1354,6 +1491,9 @@ def main() -> None:
             continue
         if command == "/lcagent":
             demo_lcagent(payload or None)
+            continue
+        if command == "/flow":
+            demo_flow(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]
