@@ -425,6 +425,10 @@ dependencies = [
 chroma = [
     { name = "chromadb" },
 ]
+classic = [
+    { name = "langchain-chroma" },
+    { name = "langchain-classic" },
+]
 deepseek = [
     { name = "openai" },
 ]
@@ -449,6 +453,8 @@ requires-dist = [
     { name = "chromadb", marker = "extra == 'chroma'", specifier = ">=0.4.0" },
     { name = "fastembed", marker = "extra == 'embedding'", specifier = ">=0.9.0,<1.0" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.4,<2" },
+    { name = "langchain-chroma", marker = "extra == 'classic'", specifier = ">=1.0,<2" },
+    { name = "langchain-classic", marker = "extra == 'classic'", specifier = ">=1.0,<2" },
     { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.0,<2" },
     { name = "langchain-deepseek", marker = "extra == 'langchain'", specifier = ">=1.0,<2" },
     { name = "langgraph", marker = "extra == 'langchain'", specifier = ">=1.0,<2" },
@@ -457,7 +463,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "ragas", marker = "extra == 'evaluation'", specifier = ">=0.4.3" },
 ]
-provides-extras = ["deepseek", "embedding", "chroma", "parse", "evaluation", "langchain"]
+provides-extras = ["deepseek", "embedding", "chroma", "parse", "evaluation", "langchain", "classic"]
 
 [[package]]
 name = "fastembed"
@@ -937,6 +943,39 @@ wheels = [
 ]
 
 [[package]]
+name = "langchain-chroma"
+version = "1.1.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "chromadb" },
+    { name = "langchain-core" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://mirrors.aliyun.com/pypi/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://mirrors.aliyun.com/pypi/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/fa/0e/54896830b7331c90788cf96b2c37858977c199da9ecdaf85cf11eb6e6bc1/langchain_chroma-1.1.0.tar.gz", hash = "sha256:8069685e7848041e998d16c8a4964256b031fd20551bf59429173415bc2adc12" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/ae/35/2a6d1191acaad043647e28313b0ecd161d61f09d8be37d1996a90d752c13/langchain_chroma-1.1.0-py3-none-any.whl", hash = "sha256:ff65e4a2ccefb0fb9fde2ff38705022ace402f979d557f018f6e623f7288f0fc" },
+]
+
+[[package]]
+name = "langchain-classic"
+version = "1.0.8"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "langchain-core" },
+    { name = "langchain-text-splitters" },
+    { name = "langsmith" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "sqlalchemy" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/8d/65/6b5e8a7ff2f2968652c88a67dcecb925b9d8f0a0ce9458c76cd5a0dbd138/langchain_classic-1.0.8.tar.gz", hash = "sha256:ada0cc341a8a5b80fb24d73bdfaaeb849056ee2d8a41cc468355163fd3667484" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/99/9a/b8f5cb7490fdbf233088031fc69c9c747439d4097f67f196c1eb4869916d/langchain_classic-1.0.8-py3-none-any.whl", hash = "sha256:1a11ea7fbe630c4f2af2f3873d27718ceac9488cf32d0821030be7cf039a6213" },
+]
+
+[[package]]
 name = "langchain-community"
 version = "0.3.31"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -1019,6 +1058,18 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/cb/8b/d908d082c3cf5368ddd1816ed114de79c873f979ba7f98b95fab0e841643/langchain_protocol-0.0.20.tar.gz", hash = "sha256:0f5bd002474265648e91161771a9e0438fe9480bd55a416e51af0f60070637ec" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/02/4b/f1c99a0b27c5ff8b4b131c0d6e62012c17cc424089efe213767db927afd2/langchain_protocol-0.0.20-py3-none-any.whl", hash = "sha256:3c935e5e46b0f6f9cb52f45ba7cfa53d1b9fa80c82c4a277d47f03e07f7385b1" },
+]
+
+[[package]]
+name = "langchain-text-splitters"
+version = "1.1.3"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "langchain-core" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/85/22/d401fffe8d3f1339f6ac880e5d637db73933efa95635304849b2d44ab0fe/langchain_text_splitters-1.1.3.tar.gz", hash = "sha256:929b6c76f99d611a5b1d8f5591ef302909b86a436ceb3217034d24e4757868d8" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/c7/51/2880d2e88cce13c1180178f7e8dc796c2f45b2dc09cc09ed407d116c08cc/langchain_text_splitters-1.1.3-py3-none-any.whl", hash = "sha256:50edeb318b3be6a6308dddd7d616ab82823a9ccbea59a9c14c58a7b91df60295" },
 ]
 
 [[package]]

@@ -66,7 +66,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit16/`、`.sqlite_unit15/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
 
-依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation --extra langchain`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。
+依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation --extra langchain --extra classic`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。其中 `classic` 只给课程参考实现用（单元17～19 的示例代码 import `langchain_classic` / `langchain_chroma`），**本项目自己的代码不 import 它**，装上只是为了能在本机把参考实现跑起来做对照。
 
 ## 交互命令
 

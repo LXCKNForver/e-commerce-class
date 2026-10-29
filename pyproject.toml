@@ -25,6 +25,13 @@ langchain = [
     "langchain>=1.4,<2",
     "langgraph>=1.0,<2",
 ]
+# 单元17～19 教师参考实现（课程示例代码）对照用：它 import 的是 langchain_classic
+# 与 langchain_chroma。本项目自己的代码一行都不 import 这两个包，但要在本机跑通参考
+# 实现做对照就得装上；写进 extras 才不会被下一次 uv sync 卸掉。
+classic = [
+    "langchain-classic>=1.0,<2",
+    "langchain-chroma>=1.0,<2",
+]
 
 [tool.uv]
 index-url = "https://mirrors.aliyun.com/pypi/simple"
