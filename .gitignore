@@ -30,3 +30,5 @@ models/
 .chroma_unit16/
 # 单元13 评估日志库（每次问答写入一行），不是源代码。
 rag_monitor.sqlite3
+# 单元19 长期记忆库：装的是"用户说过的话"，不是资料，也不随仓库分发。
+.chroma_unit19_memory/

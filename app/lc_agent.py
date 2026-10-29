@@ -354,11 +354,21 @@ def _steps_from_log(log: ToolCallLog) -> list[AgentStep]:
     ]
 
 
-def run_agent(executor: LCExecutor, question: str, max_steps: int | None = None) -> AgentRun:
+def run_agent(
+    executor: LCExecutor,
+    question: str,
+    max_steps: int | None = None,
+    history: list[Any] | None = None,
+) -> AgentRun:
     """跑一次执行器；返回答案、可追踪的步骤与停止原因。
 
     只有这一步才真正调用模型与工具。`max_steps` 换值时重建图（中间件在构图时生效），
     工具与日志沿用同一份，所以对照"上限 2 与上限 5"时资料口径不变。
+
+    `history` 是单元19 对话记忆用的：传进去的对话消息会排在本轮问句之前，
+    让模型能理解「刚才那项」指的是什么。它**只是语境**，本轮的工具调用与答案
+    一律重新产生——业务的实时状态永远来自工具，不来自历史。不传时行为与本单元
+    （单元17）验收时完全一致，所以旧调用与旧测试一个字都不用改。
     """
     clean = validate_question(question)
     limit = max_steps if max_steps is not None else executor.max_steps
@@ -371,9 +381,12 @@ def run_agent(executor: LCExecutor, question: str, max_steps: int | None = None)
         ).graph
 
     executor.log.clear()
+    # 历史只排在前面当语境；本轮问句永远是最后一条 user 消息。
+    messages: list[Any] = list(history) if history else []
+    messages.append({"role": "user", "content": clean})
     try:
         raw = graph.invoke(
-            {"messages": [{"role": "user", "content": clean}]},
+            {"messages": messages},
             # 硬闸：中间件之外再加一道递归上限。它给得比 max_steps 宽裕得多，
             # 正常轮不到它出手；万一中间件没兜住，也不会无限转下去。
             config={"recursion_limit": 4 * (limit + 2)},

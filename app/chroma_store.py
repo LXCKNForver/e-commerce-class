@@ -101,6 +101,19 @@ UNIT16_COLLECTION_METADATA = {
     "write_policy": "unit16_lcel_demo",
 }
 
+# 单元19 的长期记忆再单独用一个库目录：它装的不是资料，而是「用户说过的话」。
+# 与知识库混在一个集合里，检索证据时就会把上一轮的对话当成制度原文引用，
+# 答案无从核对——所以两库严格分开，连集合名都写清是 conversation_memory。
+DEFAULT_UNIT19_MEMORY_DB_PATH = PROJECT_ROOT / ".chroma_unit19_memory"
+UNIT19_MEMORY_COLLECTION = "after_sale_conversation_memory"
+UNIT19_MEMORY_COLLECTION_METADATA = {
+    "purpose": "unit19_conversation_memory",
+    "embedding_model": "BAAI/bge-small-zh-v1.5",
+    "dimension": 512,
+    "content_source": "运行时产生的多轮对话（按 session_id 隔离）",
+    "write_policy": "unit19_memory_only",
+}
+
 # 项目隔离标识沿用单元07；查询必须带上它，否则会拿到别的项目的数据。
 PROJECT_ID = "e-commerce-after-sales"
 # 本组售后场景里真实会问的一句话（与单元07 内存基线同一个问题，便于对照）。
@@ -175,6 +188,12 @@ def resolve_unit16_db_path() -> Path:
     """单元16 的数据库目录：默认 `.chroma_unit16/`，可用 CHROMA_UNIT16_DB_DIR 覆盖。"""
     override = os.environ.get("CHROMA_UNIT16_DB_DIR", "").strip()
     return Path(override) if override else DEFAULT_UNIT16_DB_PATH
+
+
+def resolve_unit19_memory_db_path() -> Path:
+    """单元19 长期记忆库目录：默认 `.chroma_unit19_memory/`，可用 CHROMA_UNIT19_MEMORY_DB_DIR 覆盖。"""
+    override = os.environ.get("CHROMA_UNIT19_MEMORY_DB_DIR", "").strip()
+    return Path(override) if override else DEFAULT_UNIT19_MEMORY_DB_PATH
 
 
 def render_record_fields() -> str:

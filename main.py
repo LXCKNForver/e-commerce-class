@@ -47,6 +47,12 @@ BaseTool，交给 create_agent 生成的执行器去跑循环——工具还是�
 变的是"循环不再手写"。每一步的输入、输出、失败原因与耗时都留在步骤日志里，
 所以工具出错能定位到第几步；max_steps 是模型决策次数上限，触顶就收尾且不产出答案。
 同一问题再跑一遍单元15 手写的循环作对照，只比调用的工具与数字这类硬事实。
+单元19 对话记忆：/memory 给上面那个执行器加上"记性"——顺序固定为读 → 答 → 写：
+先按会话回忆（完整历史 / 摘要 / 向量长期记忆三种模式），把「刚才那项」解析成具体编号；
+再让执行器**重新**调工具取事实（记忆只解决指代，不解决答案）；最后只把正常完成的轮次
+写回记忆。对话写在 `.chroma_unit19_memory/`，与装资料的 `.chroma_unit15/` 严格分开——
+混在一起就会把上一轮说过的话当成制度原文引用。会话隔离靠键前缀 + 库端过滤双保险。
+
 单元18 Chain编排：/flow 把"先路由、再取证据、再摘要、再润色"编成一条带条件分支的
 工作流——路由用编号/日期/业务词三条规则（不调模型），四条分支各配一条本组真实问题，
 分支到了但没证据、以及三条规则都没命中的问题，一律走兜底：不检索、不调模型、不编答案。
@@ -131,6 +137,13 @@ HELP_TEXT = """可用命令：
                   /flow routes 看流程图与分支规则表；
                   /flow steps 同一问题逐段打印每步的输入输出；
                   /flow bad 无效输入被守门拦下；/flow demo 按四节课顺序跑完一遍
+  /memory [参数]   单元19：对话记忆——读 → 答 → 写
+                  不带参数问一句（默认问 EC-FAQ-01），接着问就是同一会话的下一轮；
+                  /memory buffer|summary|vector|hybrid 用指定模式连跑两轮；
+                  /memory flow 记忆流程与两类库的分工；/memory modes 三种模式对比；
+                  /memory restart 重启后还能召回什么；/memory isolation 两个会话不串话；
+                  /memory new 会话名 换一个会话；/memory bad 无效输入被守门拦下；
+                  /memory demo 按任务卡四节课顺序跑完一遍
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -1381,6 +1394,233 @@ def demo_flow(argument: str | None = None) -> None:
     print("最小场景先跑通一条分支，再往上加分支、兜底与异常路径。")
 
 
+# 连续追问要跨命令留住执行器与记忆，所以放在模块级：`/memory 你的问题` 每敲一次
+# 就是同一会话的下一轮（换会话用 `/memory new 会话名`）。
+_MEMORY_STATE: dict = {}
+
+
+def _memory_state():
+    """延迟装配执行器与记忆管理器；只有第一次敲 `/memory` 时才建库、建图。"""
+    if "executor" not in _MEMORY_STATE:
+        from app.memory_lab import build_memory_manager, build_stack
+
+        executor, _registry, _store, kb_count, faq_rows = build_stack()
+        _MEMORY_STATE.update(
+            executor=executor,
+            manager=build_memory_manager(),
+            session=None,
+            kb_count=kb_count,
+            faq_rows=faq_rows,
+        )
+    return _MEMORY_STATE
+
+
+def demo_memory(argument: str | None = None) -> None:
+    """单元19：读 → 答 → 写的多轮问答；记忆只管指代，事实仍由工具现查。
+
+    子命令对应任务卡的四节课：`flow` 看流程图与两类库的分工（第1节）、
+    不带参数跑两轮连续问答（第2节）、`modes`/`restart` 对比三种模式与跨运行召回
+    （第3节）、`isolation`/`bad` 验证隔离与输入守门（第4节）。
+    """
+    try:
+        from app.memory_chain import (
+            MODE_HYBRID,
+            MODES,
+            render_memory_flow,
+            render_modes,
+            render_snapshot,
+            run_turn,
+        )
+        from app.memory_lab import (
+            DEFAULT_SESSION,
+            PAIR_QUESTIONS,
+            SESSION_A,
+            SESSION_B,
+            TURN1_QUESTION,
+            build_memory_manager,
+            build_stack,
+            recall_after_restart,
+            render_concepts,
+            render_restart,
+            render_run,
+            run_class,
+            run_isolation,
+            run_mode_compare,
+            run_session,
+        )
+    except ImportError as exc:
+        print(
+            f"单元19 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma --extra langchain"
+        )
+        return
+
+    payload = (argument or "").strip()
+    command, _, rest = payload.partition(" ")
+    command = command.lower()
+    text = rest.strip()
+
+    if command == "demo":
+        try:
+            run = run_class()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"记忆流程未运行：{error}")
+            return
+        print(render_run(run))
+        return
+
+    if command in ("flow", "concepts", "config"):
+        print()
+        print(render_memory_flow())
+        print()
+        print(render_concepts())
+        print()
+        print("记忆库与知识库分开，是为了不把上一轮说过的话当成制度原文引用。")
+        return
+
+    if command == "modes":
+        try:
+            executor, registry, _store, _kb, _rows = build_stack()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"记忆流程未运行：{error}")
+            return
+        records = run_mode_compare(executor, registry=registry)
+        print()
+        print(render_modes())
+        print()
+        print("（三种模式各跑两轮，第2轮都问「刚才那项」）")
+        for record in records:
+            resolution = record.snapshot.resolution
+            print(
+                f"{record.mode}\t第{record.index + 1}轮｜带进对话 {len(record.snapshot.history)} 条｜"
+                f"召回 {len(record.snapshot.recalled)} 条｜"
+                f"解析出 {resolution.object_id if resolution else '（未解析）'}｜"
+                f"工具 {'、'.join(record.tools) if record.tools else '（无）'}"
+            )
+        print()
+        print("完整历史与摘要只在内存里，向量记忆落盘：这就是「重启后还记不记得」的分界。")
+        return
+
+    if command in ("restart", "recall"):
+        count, recalled = recall_after_restart()
+        print()
+        print(render_restart(count, recalled))
+        print()
+        print("想看真正的跨进程：另开一个终端再敲一次 /memory restart，读到的还是这几条。")
+        return
+
+    if command in ("isolation", "isolate", "sessions"):
+        try:
+            executor, registry, _store, _kb, _rows = build_stack()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"记忆流程未运行：{error}")
+            return
+        (first, second), manager = run_isolation(executor)
+        print()
+        print(f"会话 {SESSION_A}：带回来历史 {len(first.snapshot.history)} 条、"
+              f"召回 {len(first.snapshot.recalled)} 条")
+        print(f"会话 {SESSION_B}：带回来历史 {len(second.snapshot.history)} 条、"
+              f"召回 {len(second.snapshot.recalled)} 条")
+        print(f"库里 {SESSION_A} 有 {manager.long_term_count(SESSION_A)} 条、"
+              f"{SESSION_B} 有 {manager.long_term_count(SESSION_B)} 条（过滤在库端做）")
+        print()
+        print("同一个管理器、两个会话：第二个会话问同样的问题，一条历史也拿不到。")
+        return
+
+    if command in ("bad", "invalid"):
+        try:
+            state = _memory_state()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"记忆流程未运行：{error}")
+            return
+        print()
+        print("输入\t结果")
+        for label, verdict in _memory_invalid_cases(state["manager"]):
+            print(f"{label}\t{verdict}")
+        print()
+        print("会话 ID 守门在读写之前：不合格的 ID 连库都不会碰。")
+        return
+
+    if command == "new":
+        state = _memory_state()
+        state["session"] = text or DEFAULT_SESSION
+        state["manager"] = build_memory_manager()
+        print(f"已切到新会话：{state['session']}（记忆清空，重新开始记）")
+        return
+
+    try:
+        state = _memory_state()
+    except (ImportError, RuntimeError, ValueError) as error:
+        print(f"记忆流程未运行：{error}")
+        return
+    executor, manager = state["executor"], state["manager"]
+    session = state.get("session") or DEFAULT_SESSION
+    print(f"会话：{session}；资料 {state['kb_count']} 条；FAQ {state['faq_rows']} 行；"
+          f"记忆写入 .chroma_unit19_memory/")
+    print("（长期记忆是落盘的：看到前几次运行的轮次属正常，换新会话敲 /memory new 甲）")
+
+    if command in MODES:
+        # 指定模式：把两轮连着跑完，第二轮刻意不写编号（「刚才那项」）。
+        for record in run_session(executor, manager, f"{session}-{command}", PAIR_QUESTIONS, command):
+            print()
+            print(f"第 {record.index + 1} 轮：{record.question}")
+            print(f"  本轮调用的工具：{'、'.join(record.tools) if record.tools else '（无'}"
+                  f"{'）' if not record.tools else '）'}")
+            print(f"  答：{record.answer or '（空）'}")
+            print(f"  {record.save_note}")
+        print()
+        print("第2轮没写编号也能答：记忆负责「哪一项」，答案仍由工具现查。")
+        return
+
+    question = payload or TURN1_QUESTION
+    try:
+        record = run_turn(executor, manager, session, question, MODE_HYBRID)
+    except (ValueError, RuntimeError) as error:
+        print(f"本轮没有运行：{error}")
+        return
+    print()
+    print(render_snapshot(record.snapshot))
+    print()
+    print(f"第 {record.index + 1} 轮｜工具：{'、'.join(record.tools) if record.tools else '（无）'}")
+    print(f"答：{record.answer or '（空）'}")
+    print(f"{record.save_note}")
+    print()
+    print("接着问（比如「刚才那项，时限是多久？」）就是下一轮，记忆会自己接上。")
+
+
+def _memory_invalid_cases(manager) -> list[tuple[str, str]]:
+    """第4节的输入守门：会话 ID 与问题在进入记忆之前就被拦下。"""
+    from app.memory_chain import MODE_HYBRID
+
+    cases: list[tuple[str, str]] = []
+    for label, raw in (
+        ("空会话 ID", ""),
+        ("含空格的会话 ID", "student a"),
+        ("含中文的会话 ID", "学生甲"),
+        ("超长会话 ID", "x" * 80),
+    ):
+        try:
+            manager.load(raw, "EC-FAQ-01 的标准答复是什么？", MODE_HYBRID)
+            verdict = "未被拦下（有问题）"
+        except ValueError as error:
+            verdict = f"已拒绝：{error}"
+        cases.append((label, verdict))
+    for label, question in (
+        ("空问题", ""),
+        ("纯空白问题", "   "),
+        ("非字符串问题", 123),
+        ("未知记忆模式", "EC-FAQ-01 的答复是什么"),
+    ):
+        try:
+            mode = "not-a-mode" if label == "未知记忆模式" else MODE_HYBRID
+            manager.load("class-demo", question, mode)
+            verdict = "未被拦下（有问题）"
+        except (ValueError, TypeError) as error:
+            verdict = f"已拒绝：{type(error).__name__}：{error}"
+        cases.append((label, verdict))
+    return cases
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -1494,6 +1734,9 @@ def main() -> None:
             continue
         if command == "/flow":
             demo_flow(payload or None)
+            continue
+        if command == "/memory":
+            demo_memory(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

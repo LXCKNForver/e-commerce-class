@@ -62,6 +62,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元18 换的是**谁来编排**：单元16 是一条直线、单元17 让模型决定下一步，本单元把「谁先做、走哪条分支」写死在程序里——`route_question()` 用三条纯规则（`EC-FAQ-NN` 编号 / 日期+时限词 / 售后业务词）判定分支，**路由不消耗模型调用**，同样的问题永远走同一条分支；`collect_evidence()` 按分支只查其中一类资料（按编号查 SQLite / 向量检索 / 检索原文 + Python 算日期），出口统一成 `evidence` / `sources` / `has_evidence`；`RunnableBranch` 判两道条件——先看是不是 `unknown`（三条规则都没命中 → 安全兜底），再看有没有证据（低于相似度门槛 → 资料不足），两者都**不检索或检索了也不调模型**，模型只在「摘要」「润色」这两步说话。每步的输入字段、输出字段、耗时与说明都记在 `StepLog` 里（`/flow steps` 可看），所以能分清是取证据、摘要还是润色的责任。命令是 `/flow [问题]`（知识分支）、`/flow faq`、`/flow deadline`、`/flow unknown`（兜底，0 次模型调用）、`/flow empty`（有分支没证据，0 次模型调用）、`/flow routes`（流程图 + 分支规则表）、`/flow steps`、`/flow bad`、`/flow demo`（按任务卡四节课跑完）。**四条分支各配一条本组真实问题**——走不到的分支等于没实现；兜底话术只说明「没接住」并转人工，不猜、不编。资料与工具仍是单元12/15 那一套（`.chroma_unit15/` + `.sqlite_unit15/`），本单元不另建库。
 
+单元19 给上面那个执行器加上**记忆**，顺序固定为 **读 → 答 → 写**：`load()` 先按会话回忆（完整历史 / 摘要 / 向量长期记忆），并把「刚才那项」用规则解析成具体编号；`run_agent()` 再**重新**调工具取事实——记忆只解决「哪一项」，不解决「答案是什么」；只有正常完成的轮次才 `save()` 回记忆，失败轮次不写。三种模式的差别在**存活范围**：完整历史与摘要只在内存里（进程一退出就没了），向量长期记忆落盘到 `.chroma_unit19_memory/`（换个进程仍可召回，证据脚本用**两个独立 Python 进程**验证）。会话隔离是双保险——内存键带 `项目:会话` 前缀，长期记忆按 `source=session:<id>` 在库端过滤。对话记忆库与业务知识库严格分开：混在一起，检索证据时就会把上一轮说过的话当成制度原文引用。命令是 `/memory [问题]`（接着问就是下一轮）、`/memory buffer｜summary｜vector｜hybrid`、`/memory flow`、`/memory modes`、`/memory restart`、`/memory isolation`、`/memory new 会话名`、`/memory bad`、`/memory demo`。
+
 默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit16/`、`.sqlite_unit15/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
 
 依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation --extra langchain`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。
@@ -117,6 +119,13 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
                 /flow empty 有分支没证据（0 次模型调用）；/flow routes 流程图与分支规则表；
                 /flow steps 逐段打印每步的输入输出；/flow bad 无效输入被守门拦下；
                 /flow demo 按任务卡四节课顺序跑完一遍
+  /memory [参数]   单元19：对话记忆——读 → 答 → 写
+                不带参数问一句（默认问 EC-FAQ-01），接着问就是同一会话的下一轮；
+                /memory buffer|summary|vector|hybrid 用指定模式连跑两轮；
+                /memory flow 记忆流程与两类库的分工；/memory modes 三种模式对比；
+                /memory restart 重启后还能召回什么；/memory isolation 两个会话不串话；
+                /memory new 会话名 换一个会话；/memory bad 无效输入被守门拦下；
+                /memory demo 按任务卡四节课顺序跑完一遍
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -146,6 +155,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 `/lcagent` 是单元17 的执行器入口：工具还是 `/tools` 那三项，换的是循环不再手写——`build_tools()` 把注册表里的 `ToolSpec` 包成 `BaseTool`（名字、说明、参数全部来自注册表，描述里没有路径、SQL 或代码），`create_agent` 负责「决策 → 执行 → 观察 → 再决策」。**错误定位靠我们自己的 `ToolCallLog`**：框架只把提议发出去，有没有真执行、成没成以日志为准，所以清单外的工具那一步是 0 条、坏参数那一步带着步号和原因回填给模型。`max_steps` 是**模型决策次数**上限（一次决策要么提工具调用、要么给答案），触顶时 `answer` 为空、只留下执行器的上限提示。**工具报错、步数上限、清单外的工具这三个异常场景用离线剧本模型跑**（模型那一栏写着 `scripted-tool-agent`），要的是可复现的异常路径，与真实模型好不好无关——工具、白名单、日志和上限都是真的。
 
 `/flow` 是单元18 的编排入口：**步骤由程序写死，模型只负责「摘要」和「润色」两步**。路由 `route_question()` 是纯函数（三条正则按优先级判：`EC-FAQ-NN` → 日期+时限词 → 售后业务词 → 兜底），所以同样的问题永远同一条分支、且不消耗模型调用；`collect_evidence()` 按分支只查其中一类资料，出口统一成同一个 `EvidencePack`。`RunnableBranch` 判两道条件：`unknown` 先兜底（**不检索、不调模型**），无证据再兜底（检索了但过不了门槛，同样**0 次模型调用**）。**「未知类型」是一条正常分支而不是异常处理**——所以知识分支刻意只收 19 个售后业务词、不收「什么/怎么」，否则任何闲聊都能被它吃掉、兜底永远走不到。每步的输入字段、输出字段、耗时与说明都进 `StepLog`，字段数逐级上涨（只加不改），出问题能分清是取证据、摘要还是润色的责任；摘要单独成一步是为了这个可归因性，合并成一次调用更省但说不清。日期分支里「N天」必须来自资料原文、日期加法由 Python 做（`compute_return_deadline` 会核对原文），日期不合法或资料没写天数一律判无证据、不让模型口算。
+
+`/memory` 是单元19 的入口：**记忆只解决指代，事实永远来自工具**。每轮固定三步——`load()` 回忆（完整历史 / 摘要 / 向量长期记忆，并把「刚才那项」解析成具体编号）、`run_agent()` 作答（工具照查，所以第2轮问「刚才那项」时步骤表里仍有 `lookup_faq`）、`save()` 落记忆（只写正常完成的轮次）。指代解析刻意用规则而不是「让模型自己体会」：解析结果要能打印、能断言、能复现，而模型内部的理解看不见；且先看该轮问句里的编号、取第一个匹配，否则答复末尾的来源编号 `DOC-02-01` 会被当成指代对象。三种模式的差别在**存活范围**而非强弱：完整历史与摘要只活在当前进程（重启即空），向量长期记忆落在 `.chroma_unit19_memory/`，换个进程还能召回——证据脚本为此跑了两个独立进程。会话隔离是双保险：内存键带 `项目:会话` 前缀，长期记忆按 `source=session:<id>` 在库端过滤，不靠「查回来再自己筛」。长期记忆只存「问了什么 + 涉及哪个编号」（答案截断 160 字），离线摘要干脆不抄答案原文——记忆的职责是让下一轮知道在聊哪个对象，不是保存事实。
 
 ## 工程内容
 
@@ -187,8 +198,10 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/lc_agent.py`：单元17 工具适配 + 执行器 + 步骤日志（`build_tools` / `build_executor` / `run_agent` / `ToolCallLog`、离线剧本模型）。
 - `app/lc_agent_lab.py`：单元17 流水线编排（装工具 → 组执行器 → 四节课场景 → 同题对照 → 渲染）。
 - `app/flow_chain.py`：单元18 路由 + 取证据 + 条件分支 + 步骤日志（`route_question` / `collect_evidence` / `build_workflow` / `StepLog`、离线编排模型）。
+- `app/memory_chain.py`：单元19 三种记忆与会话隔离（`AgentMemoryManager` / `VectorMemory` / `SummaryEngine` / `resolve_reference` / `run_turn`）。
+- `app/memory_lab.py`：单元19 流水线编排（装资料与执行器 → 四节课场景 → 三模式对比 → 跨进程召回与隔离 → 逐条验收）。
 - `app/flow_lab.py`：单元18 流水线编排（装资料与工具 → 组工作流 → 五条路径逐条验证 → 横向对照表）。
-- `tests/`：单元01—18 单元测试，469 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—18 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
+- `tests/`：单元01—19 单元测试，501 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—19 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -204,6 +217,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元16验收证据.md`：单元16 的真实运行记录（可复用件与资料来源、六段流转、组合链一次运行、同题对照与资料不足、换模型只换第五段、九类边界，脚本抓取）。
 - `docs/单元17验收证据.md`：单元17 的真实运行记录（执行器配置与工具接入、最小场景、连续调用与步骤追踪、工具报错/步数上限/清单外工具、同题对照旧循环、换模型不换工具、九类边界，脚本抓取）。
 - `docs/单元18验收证据.md`：单元18 的真实运行记录（资料与工具清单、流程与分支规则、路由逐条验、三条分支各跑一次、每步输入输出、兜底/无证据/无效输入、五条路径对照、换模型不换编排、六类边界，脚本抓取）。
+- `docs/单元19验收证据.md`：单元19 的真实运行记录（资料与两类库分工、三轮连续问答、第2轮回忆到的内容、三种模式对比、跨进程召回、会话隔离、无效输入、换模型不换记忆、四条标准逐条验收，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
