@@ -310,6 +310,7 @@ def execute_plan(
     registry: Any,
     plan: TaskPlan,
     max_replans: int = MAX_REPLANS,
+    compose_answer: bool = True,
 ) -> dict[str, Any]:
     """按计划逐步调用真实工具；失败时把原因交回规划器，至多重规划一次。
 
@@ -319,6 +320,10 @@ def execute_plan(
     与 `make_plan` 的分工不同：这里才真正访问 SQLite / Chroma / 资料原文。
     全部步骤跑完后才让模型把观察整理成答复——**失败终止时连这一步都不做**，
     所以"没解决"不会伪装成"答完了"。
+
+    `compose_answer=False` 是单元21 用的开关：多智能体架构里**答复是专职
+    角色的事**，执行智能体只交出观察，不许顺手把答案也写了。默认 True，
+    单元20 的行为一行不变。
     """
     # 用 while 而不是 for：失败后整个计划会被替换，要从新计划的第一步重新走。
     while plan.cursor < len(plan.steps):
@@ -363,14 +368,14 @@ def execute_plan(
             )
         )
         plan.cursor += 1
-    answer = _summarize(model, plan)
+    answer = _summarize(model, plan) if compose_answer else ""
     return {
         "answer": answer,
         "steps": plan.observations,
         "failures": plan.failures,
         "replanned": plan.replanned,
-        # 模型调用 = 1 次规划 + N 次重规划 + 1 次总结，是可数的，不是口头承诺。
-        "model_calls": 1 + plan.replans + 1,
+        # 模型调用 = 1 次规划 + N 次重规划 +（0 或 1）次总结，是可数的，不是口头承诺。
+        "model_calls": 1 + plan.replans + (1 if compose_answer else 0),
         "attempts": plan.attempt,
     }
 

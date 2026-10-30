@@ -65,6 +65,7 @@ BaseTool，交给 create_agent 生成的执行器去跑循环——工具还是�
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -152,6 +153,15 @@ HELP_TEXT = """可用命令：
                   /plan missing 编号合法但库里没有 → 只返回「未找到」；
                   /plan flow 流程图与概念对照；/plan bad 无效输入被守门拦下；
                   /plan demo 按任务卡四节课顺序跑完一遍
+  /agents [参数]   单元21：多智能体架构——规划/执行/证据核验/答复/评审 五角色 + 共享黑板
+                  不带参数跑正常协作（三步计划 → 观察 → 证据 → 草稿 → 评审通过 → 交付）；
+                  /agents 你的目标 自定义目标；
+                  /agents revise 评审拒绝 → 修订一次 → 通过 → 交付；
+                  /agents reject 两次都不通过 → 停止自动交付、转人工复核；
+                  /agents gap 证据不足 → 如实说明而不是编；
+                  /agents abort 执行阶段终止 → 连草稿都没有，评审不启动；
+                  /agents roles 架构图与角色输入输出表；/agents bad 无效输入被守门拦下；
+                  /agents demo 按任务卡四节课跑完一遍
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -1733,6 +1743,118 @@ def demo_plan(argument: str | None = None) -> None:
         print("计划里的每一步都对应一次真实工具调用；答复只许用观察里出现过的事实。")
 
 
+def demo_crew(argument: str | None = None) -> None:
+    """单元21：五个专职角色 + 共享黑板 + 协调者；评审不通过只修订一次。
+
+    子命令对应任务卡的四节课：`roles` 看架构图与角色表（第1节）、不带参数跑一次
+    正常协作（第2、3节）、`revise`/`reject`/`gap`/`abort`/`bad` 验证评审回路与
+    终止（第4节）。
+    """
+    try:
+        from app.multi_agent import MAX_REVISIONS, render_concepts, render_flow, render_roles
+        from app.multi_lab import (
+            build_stack,
+            render_header,
+            render_invalid,
+            render_question_list,
+            render_scenario,
+            render_standards,
+            render_summary_table,
+            run_class,
+            run_invalid,
+            run_scenario,
+        )
+    except ImportError as exc:
+        print(
+            f"单元21 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma --extra langchain"
+        )
+        return
+
+    payload = (argument or "").strip()
+    command, _, rest = payload.partition(" ")
+    command = command.lower()
+    goal = rest.strip()
+
+    if command == "demo":
+        try:
+            run = run_class()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"多智能体协作未运行：{error}")
+            return
+        print(render_header(run))
+        print()
+        print(render_flow())
+        print()
+        print(render_roles())
+        print()
+        print(render_question_list())
+        print()
+        for scenario in run.scenarios:
+            print(render_scenario(scenario))
+            print()
+        print(render_summary_table(run))
+        print()
+        print(render_standards(run))
+        print()
+        print(render_invalid(run.invalid_rows))
+        print()
+        print(f"答复智能体只有草稿、评审智能体才有放行权；评审不通过最多修订 {MAX_REVISIONS} 次。")
+        print("修订后仍不通过就停止自动交付：答复留空、状态转人工，草稿与评审意见留给人工复核。")
+        return
+
+    try:
+        registry, _model, kb_count, faq_rows = build_stack()
+    except (ImportError, RuntimeError, ValueError) as error:
+        print(f"多智能体协作未运行：{error}")
+        return
+
+    if command in ("roles", "flow", "concepts", "config"):
+        print()
+        print(render_flow())
+        print()
+        print(render_roles())
+        print()
+        print(render_concepts())
+        print()
+        print("角色之间不互相调用：全部通过共享黑板交接，每条消息都留发送者。")
+        return
+
+    if command in ("bad", "invalid"):
+        print()
+        print(render_invalid(run_invalid(registry)))
+        print()
+        print("守门在问任何角色之前：目标不合格就一个角色都不启动。")
+        return
+
+    print(f"知识库 {kb_count} 条；FAQ 库 {faq_rows} 行；工具仍是单元15 那三项（注册表未改动）")
+    if (os.getenv("LLM_PROVIDER", "mock") or "mock").strip().lower() == "deepseek":
+        print("当前是 DeepSeek 真实模式：计划、答复、评审都由模型自己写；")
+        print("revise/reject/gap/abort 四个场景是**故障注入**（草稿与评审结论用剧本）——")
+        print("真实模型不会故意写出不合格的草稿，那就演示不到拒绝、修订与停止交付了。")
+    else:
+        print("提示：LLM_PROVIDER=mock 时计划与评审由离线剧本给出（答复只摘录工具返回的原文）；")
+        print("     真实模式在 .env 里把 LLM_PROVIDER 改成 deepseek，五个角色都换成真实模型。")
+
+    if command in ("deliver", "revise", "reject", "gap", "abort"):
+        scenario = run_scenario(command, goal or None, registry=registry)
+    else:
+        # 整句都是目标：自定义目标跑一次完整协作。
+        scenario = run_scenario("deliver", payload or None, registry=registry)
+    print()
+    print(render_scenario(scenario))
+    print()
+    board = scenario.board
+    if board is None:
+        print(f"未运行：{scenario.error}")
+    elif not board.delivered:
+        print("未通过评审的草稿没有变成答复：答复留空，草稿与评审意见留在黑板上等人工复核。")
+    elif board.revisions:
+        print(f"这次修订过 {board.revisions} 次（上限 {MAX_REVISIONS}）：修订只改表述，不改工具事实。")
+    else:
+        print("五个角色各写各的产物，全部经黑板交接；评审通过才由协调者交付。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -1852,6 +1974,9 @@ def main() -> None:
             continue
         if command == "/plan":
             demo_plan(payload or None)
+            continue
+        if command == "/agents":
+            demo_crew(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

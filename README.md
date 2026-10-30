@@ -66,6 +66,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元20 换的是**先出计划、再逐步执行**：单元17 让模型边想边做、单元18 把顺序与分支写死在程序里，本单元先让模型把目标拆成一张 1~3 步的 JSON 计划——`make_plan()` 只产出「工具名 + 参数 + 这一步解决什么」，路径、SQL、代码一概进不了 `PlanStep`；再由 Python 按 cursor 逐步调用单元15 注册表里的真实工具（`execute_plan()`），每成功一步记一条观察（第几步、工具、参数、真实返回值、耗时）。失败时不猜、也不无限重试：把「第几步、什么错、已经拿到了什么」交回规划器，**只允许改一次**（`MAX_REPLANS = 1`），改完从第 1 步重跑，之前成功的观察留作审计证据；修订后仍失败就抛 `PlanAborted`——状态 aborted、答复为空，**连最后一次总结模型都不调用**，「没解决」绝不落成「完成」。两件事严格分开：`BAD` 是格式错（异常分支 → 触发重规划），`EC-FAQ-99`（格式合法但库里没有）只是「未找到」，是正常观察、不触发重规划——任务卡的故障提示点名的正是这一条。执行状态只在本次运行内保存（`TaskPlan` 在内存里，不落库），与单元19 的长期记忆正好相反。命令是 `/plan [目标]`（最小场景，单步）、`/plan multi`（三步：查答复 → 检索规则 → 算截止日期）、`/plan replan`（参数格式错 → 重规划一次 → 跑完）、`/plan abort`（修订后仍失败 → 终止并报错）、`/plan missing`（编号合法但查不到 → 未找到）、`/plan flow`（流程图与概念对照）、`/plan bad`、`/plan demo`（按任务卡四节课跑完）。
 
+单元21 换的是**谁来干活、谁来复核**：前几个单元都是一条单人流水线（同一个模型既拆计划又写答复，写完就交付），本单元把它拆成一支队伍——规划、执行、证据核验、答复、评审**五个专职角色**通过**共享黑板**交接，由**协调者** `coordinate()` 调度（协调者不调模型，只做调度与放行判断）。每个角色的输入都是上一步写进黑板的产物：规划只看目标、执行只看计划、证据核验只看观察、答复只看观察 + 证据意见（+ 评审意见）、评审只看目标 + 观察 + 证据 + 草稿；规划与执行直接复用单元20（只给 `execute_plan` 加了 `compose_answer=False`，答复不再由执行器代写）。黑板只存**产物**，每条消息都留发送者、内容与说明，所以「这份答复是怎么来的」能一条条追回去（黑板不落库，只活在内存里，与单元19 的长期记忆相反）。**答复智能体没有放行权限**：它只写草稿，草稿变成答复只能由协调者在评审通过后做。评审不通过时把理由交回答复智能体，**只许修订一次**（`MAX_REVISIONS = 1`），且只改表述、不许改工具事实；修订后仍不通过就**停止自动交付**——答复留空、状态转人工，两版草稿与两次评审意见留在黑板上给人工复核。执行阶段若终止（计划修订后仍失败），证据核验 / 答复 / 评审三个角色**根本不启动**：没有观察就没有草稿，没有草稿就无从评审。命令是 `/agents [目标]`（正常协作，三步计划）、`/agents revise`（评审拒绝 → 修订一次 → 通过 → 交付）、`/agents reject`（两次都不通过 → 停止交付、转人工）、`/agents gap`（证据不足 → 如实说明而不是编）、`/agents abort`（执行终止 → 连草稿都没有）、`/agents roles`（架构图 + 角色输入输出表）、`/agents bad`、`/agents demo`（按任务卡四节课跑完）。
+
 默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit16/`、`.sqlite_unit15/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
 
 依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation --extra langchain --extra classic`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。其中 `classic` 只给课程参考实现用（单元17～19 的示例代码 import `langchain_classic` / `langchain_chroma`），**本项目自己的代码不 import 它**，装上只是为了能在本机把参考实现跑起来做对照。
@@ -128,6 +130,17 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
                 /memory restart 重启后还能召回什么；/memory isolation 两个会话不串话；
                 /memory new 会话名 换一个会话；/memory bad 无效输入被守门拦下；
                 /memory demo 按任务卡四节课顺序跑完一遍
+  /plan [参数]     单元20：Plan-and-Solve——先出计划，再逐步执行
+                不带参数跑最小场景（单步：按编号查标准答复）；/plan 你的目标 自定义；
+                /plan multi 三步计划；/plan replan 参数格式错 → 重规划一次 → 跑完；
+                /plan abort 修订后仍失败 → 终止并报错；/plan missing 编号合法但查不到；
+                /plan flow 流程图与概念对照；/plan bad 无效输入；/plan demo 跑完四节课
+  /agents [参数]   单元21：多智能体架构——五角色 + 共享黑板 + 协调者
+                不带参数跑正常协作（计划 → 观察 → 证据 → 草稿 → 评审通过 → 交付）；
+                /agents 你的目标 自定义；/agents revise 评审拒绝 → 修订一次 → 通过；
+                /agents reject 两次都不通过 → 停止自动交付、转人工复核；
+                /agents gap 证据不足 → 如实说明；/agents abort 执行终止 → 无草稿；
+                /agents roles 架构图与角色表；/agents bad 无效输入；/agents demo 跑完四节课
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -203,7 +216,11 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/memory_chain.py`：单元19 三种记忆与会话隔离（`AgentMemoryManager` / `VectorMemory` / `SummaryEngine` / `resolve_reference` / `run_turn`）。
 - `app/memory_lab.py`：单元19 流水线编排（装资料与执行器 → 四节课场景 → 三模式对比 → 跨进程召回与隔离 → 逐条验收）。
 - `app/flow_lab.py`：单元18 流水线编排（装资料与工具 → 组工作流 → 五条路径逐条验证 → 横向对照表）。
-- `tests/`：单元01—19 单元测试，501 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—19 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
+- `app/plan_solver.py`：单元20 规划器与执行器（`make_plan` / `execute_plan` / `TaskPlan` / `StepObservation` / `PlanAborted`、离线剧本模型）。
+- `app/plan_lab.py`：单元20 流水线编排（装资料与工具 → 五条路径 → 四节课 → 逐条验收）。
+- `app/multi_agent.py`：单元21 五角色与共享黑板（`planner_agent` / `executor_agent` / `analyze_evidence` / `compose_answer` / `review_answer` / `coordinate` / `Blackboard`、离线剧本模型）。
+- `app/multi_lab.py`：单元21 流水线编排（装资料与工具 → 五条路径 → 四节课 → 逐条验收）。
+- `tests/`：单元01—21 单元测试，594 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—21 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -220,6 +237,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元17验收证据.md`：单元17 的真实运行记录（执行器配置与工具接入、最小场景、连续调用与步骤追踪、工具报错/步数上限/清单外工具、同题对照旧循环、换模型不换工具、九类边界，脚本抓取）。
 - `docs/单元18验收证据.md`：单元18 的真实运行记录（资料与工具清单、流程与分支规则、路由逐条验、三条分支各跑一次、每步输入输出、兜底/无证据/无效输入、五条路径对照、换模型不换编排、六类边界，脚本抓取）。
 - `docs/单元19验收证据.md`：单元19 的真实运行记录（资料与两类库分工、三轮连续问答、第2轮回忆到的内容、三种模式对比、跨进程召回、会话隔离、无效输入、换模型不换记忆、四条标准逐条验收，脚本抓取）。
+- `docs/单元20验收证据.md`：单元20 的真实运行记录（资料与工具、最小场景、多步骤场景、每步输入输出、重规划、终止、未找到、无效输入、四条标准逐条验收，脚本抓取）。
+- `docs/单元21验收证据.md`：单元21 的真实运行记录（架构与角色表、真实模型跑一次完整协作、每角色输入输出字段、评审修订、二次拒绝停止交付、证据不足、执行终止、无效输入、三条标准逐条验收，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
