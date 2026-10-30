@@ -144,6 +144,14 @@ HELP_TEXT = """可用命令：
                   /memory restart 重启后还能召回什么；/memory isolation 两个会话不串话；
                   /memory new 会话名 换一个会话；/memory bad 无效输入被守门拦下；
                   /memory demo 按任务卡四节课顺序跑完一遍
+  /plan [参数]     单元20：Plan-and-Solve——先出计划，再逐步执行
+                  不带参数跑最小场景（单步：按编号查标准答复）；/plan 你的目标 自定义；
+                  /plan multi 三步计划（查答复 → 检索规则 → 算截止日期）；
+                  /plan replan 参数格式错 → 重规划一次 → 跑完；
+                  /plan abort 修订后仍失败 → 终止并报错（无答复）；
+                  /plan missing 编号合法但库里没有 → 只返回「未找到」；
+                  /plan flow 流程图与概念对照；/plan bad 无效输入被守门拦下；
+                  /plan demo 按任务卡四节课顺序跑完一遍
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -1621,6 +1629,110 @@ def _memory_invalid_cases(manager) -> list[tuple[str, str]]:
     return cases
 
 
+def demo_plan(argument: str | None = None) -> None:
+    """单元20：模型只出计划，Python 逐步执行；失败至多重规划一次，仍失败就终止报错。
+
+    子命令对应任务卡的四节课：`flow` 看流程图与概念（第1节）、不带参数跑最小
+    场景（第2节）、`multi` 跑多步计划看每步观察（第3节）、`replan`/`abort`/
+    `missing`/`bad` 验证重规划、终止与守门（第4节）。
+    """
+    try:
+        from app.plan_lab import (
+            build_stack,
+            render_flow,
+            render_header,
+            render_invalid,
+            render_question_list,
+            render_scenario,
+            render_standards,
+            render_summary_table,
+            run_class,
+            run_invalid,
+            run_scenario,
+        )
+        from app.plan_solver import render_concepts
+    except ImportError as exc:
+        print(
+            f"单元20 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma --extra langchain"
+        )
+        return
+
+    payload = (argument or "").strip()
+    command, _, rest = payload.partition(" ")
+    command = command.lower()
+    goal = rest.strip()
+
+    if command == "demo":
+        try:
+            run = run_class()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"规划流程未运行：{error}")
+            return
+        print(render_header(run))
+        print()
+        print(render_flow())
+        print()
+        print(render_question_list())
+        print()
+        for scenario in run.scenarios:
+            print(render_scenario(scenario))
+            print()
+        print(render_summary_table(run))
+        print()
+        print(render_standards(run))
+        print()
+        print(render_invalid(run.invalid_rows))
+        print()
+        print("计划是数据不是指令：模型只能挑白名单里的工具并填参数，路径、SQL、代码一概碰不到。")
+        print("没解决的失败就报错：状态 aborted、答复为空、连总结那次模型调用都不发生。")
+        return
+
+    try:
+        registry, _model, kb_count, faq_rows = build_stack()
+    except (ImportError, RuntimeError, ValueError) as error:
+        print(f"规划流程未运行：{error}")
+        return
+
+    if command in ("flow", "concepts", "config"):
+        print()
+        print(render_flow())
+        print()
+        print(render_concepts())
+        print()
+        print("计划与执行分开的意义：计划错了能改，执行错了能定位到第几步。")
+        return
+
+    if command in ("bad", "invalid"):
+        print()
+        print(render_invalid(run_invalid(registry)))
+        print()
+        print("守门在问模型之前：目标不合格就一次规划都不发。")
+        return
+
+    print(f"知识库 {kb_count} 条；FAQ 库 {faq_rows} 行；工具仍是单元15 那三项（注册表未改动）")
+    if (os.getenv("LLM_PROVIDER", "mock") or "mock").strip().lower() == "deepseek":
+        print("当前是 DeepSeek 真实模式：计划由模型自己拆；")
+        print("replan/abort/missing 三个场景是**故障注入**（强制用剧本计划）——真实模型会把")
+        print("BAD 编号自己改对，那就演示不到失败、重规划与终止了。")
+    else:
+        print("提示：LLM_PROVIDER=mock 时计划与答复由离线剧本给出（只摘录工具返回的原文）；")
+        print("     真实模式在 .env 里把 LLM_PROVIDER 改成 deepseek，计划由模型自己拆。")
+
+    if command in ("minimal", "multi", "replan", "abort", "missing"):
+        scenario = run_scenario(command, goal or None, registry=registry)
+    else:
+        # 整句都是目标：自定义目标跑一次规划。
+        scenario = run_scenario("minimal", payload or None, registry=registry)
+    print()
+    print(render_scenario(scenario))
+    print()
+    if scenario.run is not None and scenario.run.replanned:
+        print("这次失败过一次：重规划只有一次机会，改完从第 1 步重新跑，旧观察留着当证据。")
+    else:
+        print("计划里的每一步都对应一次真实工具调用；答复只许用观察里出现过的事实。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -1737,6 +1849,9 @@ def main() -> None:
             continue
         if command == "/memory":
             demo_memory(payload or None)
+            continue
+        if command == "/plan":
+            demo_plan(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]
