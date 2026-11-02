@@ -434,8 +434,10 @@ def render_scenario(scenario: CrewScenario) -> str:
         title += "（故障注入：草稿与评审结论用剧本，真实模型不受影响）"
     if scenario.board is None:
         return f"{title}\n目标：{scenario.goal}\n未运行：{scenario.error}"
+    # 目标由 render_result 的第一行给出，这里只印标题——否则同一句话会在标题后
+    # 紧接着再印一遍（【…】目标：X / 空行 / 目标：X）。
     return "\n".join([
-        f"{title}目标：{scenario.goal}",
+        title,
         "",
         render_result(scenario.board),
         "",

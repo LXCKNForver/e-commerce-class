@@ -568,6 +568,21 @@ class RenderTest(unittest.TestCase):
         for role in ROLES:
             self.assertIn(role.name, text)
 
+    def test_scenario_header_prints_the_goal_once(self) -> None:
+        """标题只印场景名，目标交给 `render_result` 的第一行。
+
+        早期两处都印了一遍，`/agents demo` 的每个场景开头都是
+        「【…】目标：X / 空行 / 目标：X」——没有用例盯渲染格式，就一直没发现。
+        """
+        from app.multi_lab import CrewScenario, render_scenario
+
+        scenario = CrewScenario(
+            key="deliver", label="正常协作 → 评审通过 → 交付", goal=GOAL, board=self.board
+        )
+        text = render_scenario(scenario)
+        self.assertEqual(text.count(GOAL), 1)
+        self.assertTrue(text.startswith("【正常协作 → 评审通过 → 交付】"))
+
     def test_flow_mentions_review_loop(self) -> None:
         text = render_flow()
         for marker in ("规划智能体", "评审智能体", "共享黑板", "停止自动交付"):

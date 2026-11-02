@@ -241,7 +241,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/chat_lab.py`：单元22 编排（装资料与工具 → 六条路径 → 四节课 → 逐条验收）。
 - `app/data_agent.py`：单元23 数据分析（数据字典与字段白名单、`resolve_source` 目录守门、`load_table` / `scan_issues`、8 个固定算子的 `compute`、两次模型调用的分工与提示词、`check_explanation` 数字核验）。
 - `app/data_lab.py`：单元23 编排（装本组 CSV → 六条路径 → 四条标准 → 守门 → 概念表）。
-- `tests/`：单元01—23 单元测试，750 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—23 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
+- `tests/`：单元01—23 单元测试，751 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—23 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
