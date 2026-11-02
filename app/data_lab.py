@@ -210,7 +210,7 @@ REJECT_CASES: list[tuple[str, Any]] = [
 # 数据目录与权限的用例：模型给不出路径，只能给文件名，越界一律拒绝。
 FILE_CASES: list[tuple[str, Any]] = [
     ("目录穿越", "../../../records.json"),
-    ("绝对路径", "D:/pycharm/Agent/e-commerce-class/records.json"),
+    ("绝对路径", "C:/somewhere/records.json"),
     ("带目录的文件名", "子目录/电商售后工单.csv"),
     ("非 CSV 后缀", "电商售后工单.txt"),
     ("文件不存在", "不存在的文件.csv"),

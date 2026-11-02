@@ -25,7 +25,9 @@ TARGET = ROOT / "docs" / "单元23验收证据.md"
 
 BOOTSTRAP = '''
 import os, sys
-sys.path.insert(0, r"{root}")
+from pathlib import Path
+ROOT = Path(r"{root}")
+sys.path.insert(0, str(ROOT))
 os.environ.pop("ACC_PRODUCT_CONFIG_V3", None)
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["LLM_PROVIDER"] = "{provider}"
@@ -54,7 +56,7 @@ PREPARE_FLOW = '''
 table = load_table(DATA_ROOT / DATA_FILE)
 dirty = load_table(DATA_ROOT / DIRTY_FILE)
 print("数据与权限（第3位成员负责的那一摊）：")
-print("  数据目录：", DATA_ROOT)
+print("  数据目录：", DATA_ROOT.relative_to(ROOT).as_posix(), "（仓库内相对路径）")
 print("  本组数据：", DATA_FILE, "（", table.row_count, "行 ×", len(table.columns), "列）")
 print("  脏数据样本：", DIRTY_FILE, "（", dirty.row_count, "行，", len(dirty.issues), "处坏值；第4节用）")
 print("  单个文件上限：", MAX_FILE_BYTES, "字节；只允许 .csv，且文件名不带目录分隔符")
