@@ -70,6 +70,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元22 换的是**协作的形态**：单元21 用共享黑板交接"字段化的产物"，本单元三个角色（规划员 / 答复执行员 / 评审员）同处**一间群聊**——消息按顺序累积，**后发言的人看得到前面所有人的原话**，由 `GroupChatManager` 决定下一位谁说话、什么时候停（管理器自己不调模型）。`max_round` 是**消息条数**硬上限，**含发起者那条**（3 个角色各发言一次要写 4，这是 AutoGen 的口径，也是课堂最容易数错的一格）；成本另算一条线：按 1.6 字符≈1 token 估算，超预算就不再让下一位开口。两条上限互相独立、检查都发生在花钱之前，触发时状态一律是「未交付」。**复核不通过不立刻收尾**：群聊继续下一轮，执行员看到复核意见再改一版，直到有人通过或轮次/成本用完；仍未通过就答复留空、转人工。**执行员写的永远是草稿**，只有评审员 `passed=true` 才变成正式答复；复核输出不是 JSON 或缺布尔字段，一律判**不通过**（"看不懂就当通过"是最危险的默认值）。四种终止原因分开写：`reviewed` / `review_rejected` / `max_round` / `token_budget`。工具在群聊开始前由 Python 调好（群聊里没有工具，模型无法新增事实）。关于 AutoGen：任务卡允许「AutoGen 或**等价轻量实现**」，本组选后者——`ChatAgent` / `GroupChat` / `GroupChatManager` 与 AutoGen 0.2 的三个对象一一对应、行为相同，但不引入 `pyautogen`（它会带进 openai/docker/flaml 一整套），取舍写在 `app/chat_crew.py` 文件头。命令是 `/group`（正常协作）、`/group tight`（只给 2 轮 → 复核没轮到）、`/group budget`（预算花完 → 钱先用完、轮次还有余）、`/group reject`（复核不通过 → 答复留空）、`/group gap`（编号查不到 → 如实说明）、`/group roles`、`/group bad`、`/group demo`。
 
+单元23 换的是**让模型碰数据、但不让它碰执行**：本单元目标写得很直白——Agent 安全读取项目 CSV，完成指定统计并用业务语言解释结果，**不执行任意生成代码**。守住这条的是三道设计：第一，模型两次发言都不碰数据本体——第一次只给它数据字典、字段白名单和 8 个固定算子（`count / sum / mean / max / min / group_count / group_sum / group_mean`），它只能回一个 JSON 口径（`{"metric": ..., "field": ..., "filters": {...}}`），**看不到一行数据、拿不到文件路径**；第二次只给它 Python 已经算好的结果，让它翻译成业务语言。第二，真正的加法全在 `compute()` 的 8 个分支里，模型想塞一段表达式（比如 `sum(x for x in rows)`）会被当成"未知算子"拒掉，`app/data_agent.py` 里没有 `eval(` / `exec(` / `__import__(`（有一条测试用 `inspect.getsource` 盯着）。第三，写完解释还有一道 `check_explanation`：每个带单位的数字都要能在结果里找到出处，找不到就点名列出——模型可以说"物流异常 8 单（25.0%）"，但不能自己造一个 8。**字段白名单的意义是"列存在 ≠ 可以统计"**：`case_id`、`order_id` 在表里真的有，但统计编号没有业务含义、还可能泄露客户信息，一律在统计之前拒绝（统计 0 次，连解释都不调）。**空值与非数字既不静默当 0，也不整行丢弃**：脏样本里跳过 3 行、参与 29 行，均值 162.34 元（当成 0 算只有 147.12），分组字段为空则归入「（空值）」组，行数一条都对得上。每个结果都带四行行数（总 / 筛选后 / 参与 / 跳过）+ 一条含除号的算式 + 前 5 行抽样，可以直接拿计算器复核。命令是 `/data`（最小场景）、`/data schema`（数据字典与白名单）、`/data refund`（数值聚合）、`/data handoff`（带筛选计数）、`/data dirty`（空值与非数字）、`/data forbidden`（越权字段）、`/data missing`（筛选后 0 行）、`/data bad`（守门）、`/data demo`（按任务卡四节课跑完）。
+
 默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit16/`、`.sqlite_unit15/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
 
 依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation --extra langchain --extra classic`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。其中 `classic` 只给课程参考实现用（单元17～19 的示例代码 import `langchain_classic` / `langchain_chroma`），**本项目自己的代码不 import 它**，装上只是为了能在本机把参考实现跑起来做对照。
@@ -149,6 +151,12 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
                 /group budget 预算花完就停；/group reject 复核不通过 → 答复留空；
                 /group gap 编号查不到 → 如实说明；/group roles 群聊时序与角色表；
                 /group bad 无效输入与越界参数；/group demo 跑完四节课
+  /data [参数]     单元23：数据分析 Agent——安全读本组 CSV（白名单 + 8 个固定算子）
+                不带参数跑最小场景（各类问题各多少单；口径与解释都由模型写）；
+                /data 你的问题 自定义；/data schema 数据字典与字段白名单；
+                /data refund 已退款金额合计；/data handoff 需要转人工的工单；
+                /data dirty 空值与非数字（跳过并如实报数）；/data forbidden 越权字段；
+                /data bad 无效问题与越界文件名；/data demo 跑完四节课
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -230,7 +238,9 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/multi_lab.py`：单元21 流水线编排（装资料与工具 → 五条路径 → 四节课 → 逐条验收）。
 - `app/chat_crew.py`：单元22 群聊协作（`ChatAgent` / `GroupChat` / `GroupChatManager` 三个等价 AutoGen 对象、`Collaboration`、成本估算、复核协议、离线剧本模型）。
 - `app/chat_lab.py`：单元22 编排（装资料与工具 → 六条路径 → 四节课 → 逐条验收）。
-- `tests/`：单元01—22 单元测试，675 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—22 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
+- `app/data_agent.py`：单元23 数据分析（数据字典与字段白名单、`resolve_source` 目录守门、`load_table` / `scan_issues`、8 个固定算子的 `compute`、两次模型调用的分工与提示词、`check_explanation` 数字核验）。
+- `app/data_lab.py`：单元23 编排（装本组 CSV → 六条路径 → 四条标准 → 守门 → 概念表）。
+- `tests/`：单元01—23 单元测试，750 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—23 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -250,6 +260,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元20验收证据.md`：单元20 的真实运行记录（资料与工具、最小场景、多步骤场景、每步输入输出、重规划、终止、未找到、无效输入、四条标准逐条验收，脚本抓取）。
 - `docs/单元21验收证据.md`：单元21 的真实运行记录（架构与角色表、真实模型跑一次完整协作、每角色输入输出字段、评审修订、二次拒绝停止交付、证据不足、执行终止、无效输入、三条标准逐条验收，脚本抓取）。
 - `docs/单元22验收证据.md`：单元22 的真实运行记录（群聊结构与角色表、真实模型跑一次完整协作、逐位核对每人读到的提示词、轮次上限、成本上限、复核不通过、多轮往复、证据不足、无效任务与越界参数、四条标准逐条验收，脚本抓取）。
+- `docs/单元23验收证据.md`：单元23 的真实运行记录（数据字典与白名单、真实模型跑一次完整分析、两次调用各自读到什么、数值与筛选、脏数据、越权字段、筛选后 0 行、三道守门、不执行生成代码的源码核对、四条标准逐条验收，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。

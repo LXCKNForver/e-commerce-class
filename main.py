@@ -171,6 +171,15 @@ HELP_TEXT = """可用命令：
                   /group gap 编号查不到 → 如实说明、复核照样通过；
                   /group roles 群聊时序与角色表；/group bad 无效输入被守门拦下；
                   /group demo 按任务卡四节课跑完一遍
+  /data [参数]     单元23：数据分析 Agent——安全读本组 CSV，只做白名单内的统计
+                  不带参数跑最小场景（按问题类型分组计数）；
+                  /data 你的问题 自定义问题（口径由模型选）；
+                  /data refund 已退款金额合计；/data handoff 转人工工单数；
+                  /data dirty 空值与非数字有提示 → 跳过并报数；
+                  /data forbidden 越权字段（订单号）被白名单拦下；
+                  /data missing 筛选后 0 行 → 如实说没有数据；
+                  /data schema 数据字典与字段白名单；/data bad 越界与越权；
+                  /data demo 按任务卡四节课跑完一遍
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -1993,6 +2002,147 @@ def demo_group(argument: str | None = None) -> None:
         print("复核通过才把执行员的草稿变成答复：放行权在评审员，不在写草稿的人手里。")
 
 
+def demo_data(argument: str | None = None) -> None:
+    """单元23：安全读取本组 CSV，只做白名单内的统计，再由模型用业务语言解释。
+
+    子命令对应任务卡的四节课：`schema` 看数据字典与字段白名单（第1节）、
+    不带参数跑最小场景（第2节）、`refund`/`handoff` 看统计与解释（第3节）、
+    `dirty`/`forbidden`/`bad` 验证空值、越权与守门（第4节）。
+    """
+    try:
+        from app.data_agent import (
+            DATA_FILE,
+            DIRTY_FILE,
+            MAX_FILE_BYTES,
+            build_data_model,
+            render_concepts,
+            render_dictionary,
+            render_flow,
+            render_result,
+            render_whitelist,
+            run_analysis,
+        )
+        from app.data_lab import (
+            render_file_guards,
+            render_header,
+            render_invalid,
+            render_question_list,
+            render_rejects,
+            render_scenario,
+            render_standards,
+            render_summary_table,
+            run_class,
+            run_file_guards,
+            run_invalid,
+            run_rejects,
+            run_scenario,
+        )
+    except ImportError as exc:
+        print(
+            f"单元23 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra langchain"
+        )
+        return
+
+    payload = (argument or "").strip()
+    if not payload:
+        payload = "overview"  # 不带参数就跑第2节那个最小场景
+    command, _, rest = payload.partition(" ")
+    command = command.lower()
+    question = rest.strip()
+
+    if command == "demo":
+        try:
+            run = run_class()
+        except (ImportError, RuntimeError, ValueError, FileNotFoundError) as error:
+            print(f"数据分析未运行：{error}")
+            return
+        print(render_header(run))
+        print()
+        print(render_flow())
+        print()
+        print(render_dictionary())
+        print()
+        print(render_whitelist())
+        print()
+        print(render_question_list())
+        print()
+        for row in run.scenarios:
+            print(render_scenario(row))
+            print()
+        print(render_summary_table(run))
+        print()
+        print(render_standards(run))
+        print()
+        print(render_rejects(run.reject_rows))
+        print()
+        print(render_file_guards(run.file_rows))
+        print()
+        print(render_invalid(run.invalid_rows))
+        print()
+        print(render_concepts())
+        print()
+        print("模型只输出「选了哪个算子、哪个字段」：执行路径是固定的 8 个算子，没有 eval/exec。")
+        print("空值与非数字既不静默当 0，也不整行丢弃：跳过多少行、跳的哪几行，全部列出来。")
+        return
+
+    if command in ("schema", "dict", "fields", "flow"):
+        print()
+        print(render_flow())
+        print()
+        print(render_dictionary())
+        print()
+        print(render_whitelist())
+        print()
+        print(render_concepts())
+        print()
+        print(f"数据目录只认本组那一个文件夹，单文件上限 {MAX_FILE_BYTES} 字节。")
+        print("模型拿不到路径：它只能给文件名，而且必须是白名单里的字段。")
+        return
+
+    if command in ("bad", "invalid"):
+        print()
+        print(render_invalid(run_invalid()))
+        print()
+        print(render_file_guards(run_file_guards()))
+        print()
+        print(render_rejects(run_rejects()))
+        print()
+        print("三道门：问题不合格、文件名越界、字段越权——都在统计之前拦下，一次都没算。")
+        return
+
+    if command in ("overview", "refund", "handoff", "dirty", "forbidden", "missing"):
+        row = run_scenario(command, question or None)
+        print()
+        print(render_scenario(row))
+        print()
+        if row.result is None:
+            print(f"未运行：{row.error}")
+        elif row.result.rejected:
+            print("越权字段被白名单拦下：统计一次都没发生，解释也没调——先看字段能不能用。")
+        elif not row.result.has_data:
+            print("这次没有算出一个数（筛选后 0 行）：如实说没有数据，不报错、不猜。")
+        else:
+            print("统计由 Python 完成：模型只选了算子与字段，金额不是它算的。")
+        return
+
+    # 整句都是业务问题：自定义问题跑一次完整分析（口径由模型自己选）。
+    try:
+        result = run_analysis(build_data_model(), payload)
+    except (ValueError, RuntimeError, FileNotFoundError) as error:
+        print(f"数据分析未运行：{error}")
+        return
+    print()
+    print(render_result(result))
+    print()
+    if (os.getenv("LLM_PROVIDER", "mock") or "mock").strip().lower() == "deepseek":
+        print("当前是 DeepSeek 真实模式：算子与字段由模型自己选，解释也由它写。")
+    else:
+        print("提示：LLM_PROVIDER=mock 时口径来自离线剧本（默认是计数）；")
+        print(f"     真实模式在 .env 里把 LLM_PROVIDER 改成 deepseek，口径与解释才由模型写。")
+        print(f"     数据只在这两份里：{DATA_FILE}、{DIRTY_FILE}。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -2118,6 +2268,9 @@ def main() -> None:
             continue
         if command == "/group":
             demo_group(payload or None)
+            continue
+        if command == "/data":
+            demo_data(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]
