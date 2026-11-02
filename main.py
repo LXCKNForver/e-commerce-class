@@ -162,6 +162,15 @@ HELP_TEXT = """可用命令：
                   /agents abort 执行阶段终止 → 连草稿都没有，评审不启动；
                   /agents roles 架构图与角色输入输出表；/agents bad 无效输入被守门拦下；
                   /agents demo 按任务卡四节课跑完一遍
+  /group [参数]    单元22：AutoGen 实战——规划员/答复执行员/评审员 三个角色同处一间群聊
+                  不带参数跑正常协作（证据 → 规划 → 草稿 → 复核通过 → 交付）；
+                  /group 你的任务 自定义任务；
+                  /group tight 只给 2 轮 → 复核没轮到 → 未交付；
+                  /group budget 预算花完就停 → 未交付（轮次还有余）；
+                  /group reject 复核不通过 → 答复留空、转人工；
+                  /group gap 编号查不到 → 如实说明、复核照样通过；
+                  /group roles 群聊时序与角色表；/group bad 无效输入被守门拦下；
+                  /group demo 按任务卡四节课跑完一遍
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -1855,6 +1864,135 @@ def demo_crew(argument: str | None = None) -> None:
         print("五个角色各写各的产物，全部经黑板交接；评审通过才由协调者交付。")
 
 
+def demo_group(argument: str | None = None) -> None:
+    """单元22：三个角色在同一间群聊里轮流发言，轮次与成本双上限，复核通过才交付。
+
+    子命令对应任务卡的四节课：`roles` 看群聊时序与角色表（第1节）、不带参数跑一次
+    正常协作（第2节）、`tight` 看轮次上限（第3节）、`budget`/`reject`/`gap`/`bad`
+    验证成本上限、复核不通过与守门（第4节）。
+    """
+    try:
+        from app.chat_crew import (
+            DEFAULT_TOKEN_BUDGET,
+            MAX_ROUNDS,
+            render_concepts,
+            render_flow,
+        )
+        from app.chat_lab import (
+            build_stack,
+            render_agents,
+            render_guards,
+            render_header,
+            render_invalid,
+            render_question_list,
+            render_scenario,
+            render_standards,
+            render_state_table,
+            render_summary_table,
+            run_class,
+            run_guards,
+            run_invalid,
+            run_scenario,
+        )
+    except ImportError as exc:
+        print(
+            f"单元22 依赖未安装（{exc}）。"
+            "请先执行：uv sync --extra embedding --extra chroma --extra langchain"
+        )
+        return
+
+    payload = (argument or "").strip()
+    command, _, rest = payload.partition(" ")
+    command = command.lower()
+    goal = rest.strip()
+
+    if command == "demo":
+        try:
+            run = run_class()
+        except (ImportError, RuntimeError, ValueError) as error:
+            print(f"群聊协作未运行：{error}")
+            return
+        print(render_header(run))
+        print()
+        print(render_flow())
+        print()
+        print(render_agents())
+        print()
+        print(render_question_list())
+        print()
+        for scenario in run.scenarios:
+            print(render_scenario(scenario))
+            print()
+        print(render_summary_table(run))
+        print()
+        print(render_state_table(run))
+        print()
+        print(render_standards(run))
+        print()
+        print(render_invalid(run.invalid_rows))
+        print()
+        print(render_guards(run.guard_rows))
+        print()
+        print(render_concepts())
+        print()
+        print("执行员写的是草稿：复核不发言或不通过，答复就是空的。")
+        print("轮次与成本都是 Python 判断：停下来时状态一定是「未交付」，不补一轮、不硬撑。")
+        return
+
+    try:
+        registry, _model, kb_count, faq_rows = build_stack()
+    except (ImportError, RuntimeError, ValueError) as error:
+        print(f"群聊协作未运行：{error}")
+        return
+
+    if command in ("roles", "flow", "concepts", "config"):
+        print()
+        print(render_flow())
+        print()
+        print(render_agents())
+        print()
+        print(render_concepts())
+        print()
+        print(f"轮次上限 {MAX_ROUNDS} 轮；常规成本预算 {DEFAULT_TOKEN_BUDGET}（估算 token）。")
+        print("同一间群聊里后发言的人看得到前面所有人的原话，这是消息流的可见性。")
+        return
+
+    if command in ("bad", "invalid"):
+        print()
+        print(render_invalid(run_invalid(registry)))
+        print()
+        print(render_guards(run_guards(registry)))
+        print()
+        print("守门在让任何角色开口之前：任务或参数不合格，一次模型调用都不发。")
+        return
+
+    print(f"知识库 {kb_count} 条；FAQ 库 {faq_rows} 行；工具仍是单元15 那三项（注册表未改动）")
+    if (os.getenv("LLM_PROVIDER", "mock") or "mock").strip().lower() == "deepseek":
+        print("当前是 DeepSeek 真实模式：三位角色的发言都由模型自己写；")
+        print("tight/budget/reject/gap 四个场景是**故障注入**（发言与复核结论用剧本）——")
+        print("真实模型不会故意少说一轮、也不会自己写一份不合格的草稿，那就演示不到终止条件了。")
+    else:
+        print("提示：LLM_PROVIDER=mock 时发言由离线剧本给出（执行员只摘录工具返回的原文）；")
+        print("     真实模式在 .env 里把 LLM_PROVIDER 改成 deepseek，三个角色都换成真实模型。")
+
+    if command in ("deliver", "tight", "budget", "reject", "gap"):
+        scenario = run_scenario(command, goal or None, registry=registry)
+    else:
+        # 整句都是任务：自定义任务跑一次完整协作。
+        scenario = run_scenario("deliver", payload or None, registry=registry)
+    print()
+    print(render_scenario(scenario))
+    print()
+    collab = scenario.collaboration
+    if collab is None:
+        print(f"未运行：{scenario.error}")
+    elif not collab.delivered:
+        print(f"这次没有交付（{collab.stop_reason}）：{collab.stop_note}")
+        print("草稿仍在消息流里，可逐条追溯——停下来不等于丢掉证据。")
+    else:
+        print("复核通过才把执行员的草稿变成答复：放行权在评审员，不在写草稿的人手里。")
+
+
 def run_demo(session: AgentSession) -> None:
     print("开始演示：3 个正常问题 + 2 个越权问题（工具闭环模式）。")
     for index, question in enumerate(NORMAL_QUESTIONS, start=1):
@@ -1977,6 +2115,9 @@ def main() -> None:
             continue
         if command == "/agents":
             demo_crew(payload or None)
+            continue
+        if command == "/group":
+            demo_group(payload or None)
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

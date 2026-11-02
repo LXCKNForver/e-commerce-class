@@ -68,6 +68,8 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元21 换的是**谁来干活、谁来复核**：前几个单元都是一条单人流水线（同一个模型既拆计划又写答复，写完就交付），本单元把它拆成一支队伍——规划、执行、证据核验、答复、评审**五个专职角色**通过**共享黑板**交接，由**协调者** `coordinate()` 调度（协调者不调模型，只做调度与放行判断）。每个角色的输入都是上一步写进黑板的产物：规划只看目标、执行只看计划、证据核验只看观察、答复只看观察 + 证据意见（+ 评审意见）、评审只看目标 + 观察 + 证据 + 草稿；规划与执行直接复用单元20（只给 `execute_plan` 加了 `compose_answer=False`，答复不再由执行器代写）。黑板只存**产物**，每条消息都留发送者、内容与说明，所以「这份答复是怎么来的」能一条条追回去（黑板不落库，只活在内存里，与单元19 的长期记忆相反）。**答复智能体没有放行权限**：它只写草稿，草稿变成答复只能由协调者在评审通过后做。评审不通过时把理由交回答复智能体，**只许修订一次**（`MAX_REVISIONS = 1`），且只改表述、不许改工具事实；修订后仍不通过就**停止自动交付**——答复留空、状态转人工，两版草稿与两次评审意见留在黑板上给人工复核。执行阶段若终止（计划修订后仍失败），证据核验 / 答复 / 评审三个角色**根本不启动**：没有观察就没有草稿，没有草稿就无从评审。命令是 `/agents [目标]`（正常协作，三步计划）、`/agents revise`（评审拒绝 → 修订一次 → 通过 → 交付）、`/agents reject`（两次都不通过 → 停止交付、转人工）、`/agents gap`（证据不足 → 如实说明而不是编）、`/agents abort`（执行终止 → 连草稿都没有）、`/agents roles`（架构图 + 角色输入输出表）、`/agents bad`、`/agents demo`（按任务卡四节课跑完）。
 
+单元22 换的是**协作的形态**：单元21 用共享黑板交接"字段化的产物"，本单元三个角色（规划员 / 答复执行员 / 评审员）同处**一间群聊**——消息按顺序累积，**后发言的人看得到前面所有人的原话**，由 `GroupChatManager` 决定下一位谁说话、什么时候停（管理器自己不调模型）。`max_round` 是**消息条数**硬上限，**含发起者那条**（3 个角色各发言一次要写 4，这是 AutoGen 的口径，也是课堂最容易数错的一格）；成本另算一条线：按 1.6 字符≈1 token 估算，超预算就不再让下一位开口。两条上限互相独立、检查都发生在花钱之前，触发时状态一律是「未交付」。**复核不通过不立刻收尾**：群聊继续下一轮，执行员看到复核意见再改一版，直到有人通过或轮次/成本用完；仍未通过就答复留空、转人工。**执行员写的永远是草稿**，只有评审员 `passed=true` 才变成正式答复；复核输出不是 JSON 或缺布尔字段，一律判**不通过**（"看不懂就当通过"是最危险的默认值）。四种终止原因分开写：`reviewed` / `review_rejected` / `max_round` / `token_budget`。工具在群聊开始前由 Python 调好（群聊里没有工具，模型无法新增事实）。关于 AutoGen：任务卡允许「AutoGen 或**等价轻量实现**」，本组选后者——`ChatAgent` / `GroupChat` / `GroupChatManager` 与 AutoGen 0.2 的三个对象一一对应、行为相同，但不引入 `pyautogen`（它会带进 openai/docker/flaml 一整套），取舍写在 `app/chat_crew.py` 文件头。命令是 `/group`（正常协作）、`/group tight`（只给 2 轮 → 复核没轮到）、`/group budget`（预算花完 → 钱先用完、轮次还有余）、`/group reject`（复核不通过 → 答复留空）、`/group gap`（编号查不到 → 如实说明）、`/group roles`、`/group bad`、`/group demo`。
+
 默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit16/`、`.sqlite_unit15/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
 
 依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation --extra langchain --extra classic`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。其中 `classic` 只给课程参考实现用（单元17～19 的示例代码 import `langchain_classic` / `langchain_chroma`），**本项目自己的代码不 import 它**，装上只是为了能在本机把参考实现跑起来做对照。
@@ -141,6 +143,12 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
                 /agents reject 两次都不通过 → 停止自动交付、转人工复核；
                 /agents gap 证据不足 → 如实说明；/agents abort 执行终止 → 无草稿；
                 /agents roles 架构图与角色表；/agents bad 无效输入；/agents demo 跑完四节课
+  /group [参数]    单元22：AutoGen 实战——三角色同处一间群聊（轮次/成本双上限）
+                不带参数跑正常协作（证据 → 规划 → 草稿 → 复核通过 → 交付）；
+                /group 你的任务 自定义；/group tight 只给 2 轮（复核没轮到）；
+                /group budget 预算花完就停；/group reject 复核不通过 → 答复留空；
+                /group gap 编号查不到 → 如实说明；/group roles 群聊时序与角色表；
+                /group bad 无效输入与越界参数；/group demo 跑完四节课
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -220,7 +228,9 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/plan_lab.py`：单元20 流水线编排（装资料与工具 → 五条路径 → 四节课 → 逐条验收）。
 - `app/multi_agent.py`：单元21 五角色与共享黑板（`planner_agent` / `executor_agent` / `analyze_evidence` / `compose_answer` / `review_answer` / `coordinate` / `Blackboard`、离线剧本模型）。
 - `app/multi_lab.py`：单元21 流水线编排（装资料与工具 → 五条路径 → 四节课 → 逐条验收）。
-- `tests/`：单元01—21 单元测试，594 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—21 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
+- `app/chat_crew.py`：单元22 群聊协作（`ChatAgent` / `GroupChat` / `GroupChatManager` 三个等价 AutoGen 对象、`Collaboration`、成本估算、复核协议、离线剧本模型）。
+- `app/chat_lab.py`：单元22 编排（装资料与工具 → 六条路径 → 四节课 → 逐条验收）。
+- `tests/`：单元01—22 单元测试，675 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—22 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -239,6 +249,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元19验收证据.md`：单元19 的真实运行记录（资料与两类库分工、三轮连续问答、第2轮回忆到的内容、三种模式对比、跨进程召回、会话隔离、无效输入、换模型不换记忆、四条标准逐条验收，脚本抓取）。
 - `docs/单元20验收证据.md`：单元20 的真实运行记录（资料与工具、最小场景、多步骤场景、每步输入输出、重规划、终止、未找到、无效输入、四条标准逐条验收，脚本抓取）。
 - `docs/单元21验收证据.md`：单元21 的真实运行记录（架构与角色表、真实模型跑一次完整协作、每角色输入输出字段、评审修订、二次拒绝停止交付、证据不足、执行终止、无效输入、三条标准逐条验收，脚本抓取）。
+- `docs/单元22验收证据.md`：单元22 的真实运行记录（群聊结构与角色表、真实模型跑一次完整协作、逐位核对每人读到的提示词、轮次上限、成本上限、复核不通过、多轮往复、证据不足、无效任务与越界参数、四条标准逐条验收，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
