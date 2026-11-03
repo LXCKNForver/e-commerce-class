@@ -26,12 +26,13 @@ FastAPI 的环境里单测（`tests/test_unit24.py` 里大部分用例都不启�
 
 from __future__ import annotations
 
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -39,6 +40,7 @@ from app.platform_auth import (
     PermissionDenied,
     Principal,
     ROLE_AGENT,
+    ROLE_SUPERVISOR,
     TokenError,
     can_view_all,
     issue_token,
@@ -71,6 +73,10 @@ class FeedbackRequest(BaseModel):
 
 class HandoffRequest(BaseModel):
     request_id: str = Field(pattern=REQUEST_ID_PATTERN)
+
+
+class DemoLoginRequest(BaseModel):
+    seat_id: str
 
 
 @lru_cache(maxsize=1)
@@ -158,6 +164,16 @@ def create_app(context: PlatformContext | None = None) -> FastAPI:
         }
 
     # ------------------------------------------------------------ 身份
+
+    @app.post("/v1/demo-login", include_in_schema=False)
+    def demo_login(payload: DemoLoginRequest, request: Request) -> dict[str, str]:
+        if os.getenv("APP_DEMO_LOGIN") != "1" or not request.client or request.client.host not in {"127.0.0.1", "::1", "testclient"}:
+            raise HTTPException(status_code=404, detail="未找到页面")
+        roles = {"A001": ROLE_AGENT, "A002": ROLE_AGENT, "M001": ROLE_SUPERVISOR}
+        role = roles.get(payload.seat_id)
+        if role is None:
+            raise HTTPException(status_code=422, detail="请选择可用的演示身份")
+        return {"token": issue_token(payload.seat_id, role, root=PROJECT_ROOT)}
 
     @app.get("/v1/me")
     def me(principal: PrincipalDep, service: ServiceDep) -> dict[str, Any]:

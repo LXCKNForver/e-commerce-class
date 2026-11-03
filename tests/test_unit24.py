@@ -514,6 +514,21 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("售后服务工作台", response.text)
 
+    def test_demo_login_is_disabled_by_default(self) -> None:
+        with mock.patch.dict(os.environ, {"APP_DEMO_LOGIN": ""}):
+            response = self.client.post("/v1/demo-login", json={"seat_id": "A001"})
+            self.assertEqual(response.status_code, 404)
+
+    def test_demo_login_issues_existing_role_token_only_when_enabled(self) -> None:
+        with mock.patch.dict(os.environ, {"APP_DEMO_LOGIN": "1"}):
+            agent = self.client.post("/v1/demo-login", json={"seat_id": "A001"})
+            boss = self.client.post("/v1/demo-login", json={"seat_id": "M001"})
+            self.assertEqual(agent.status_code, 200)
+            self.assertEqual(boss.status_code, 200)
+            self.assertEqual(self.client.get("/v1/me", headers=self.headers(agent.json()["token"])).json()["role"], ROLE_AGENT)
+            self.assertEqual(self.client.get("/v1/me", headers=self.headers(boss.json()["token"])).json()["role"], ROLE_SUPERVISOR)
+            self.assertEqual(self.client.post("/v1/demo-login", json={"seat_id": "A999"}).status_code, 422)
+
     def test_missing_or_bad_token_is_401(self) -> None:
         self.assertEqual(self.client.get("/v1/me").status_code, 401)
         bad = self.client.get("/v1/me", headers={"Authorization": "Bearer broken.token"})
