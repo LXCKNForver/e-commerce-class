@@ -514,10 +514,15 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("售后服务工作台", response.text)
 
-    def test_demo_login_is_disabled_by_default(self) -> None:
-        with mock.patch.dict(os.environ, {"APP_DEMO_LOGIN": ""}):
+    def test_demo_login_can_be_disabled_explicitly(self) -> None:
+        with mock.patch.dict(os.environ, {"APP_DEMO_LOGIN": "0"}):
             response = self.client.post("/v1/demo-login", json={"seat_id": "A001"})
             self.assertEqual(response.status_code, 404)
+
+    def test_demo_login_works_on_localhost_without_extra_config(self) -> None:
+        with mock.patch.dict(os.environ, {"APP_DEMO_LOGIN": ""}):
+            response = self.client.post("/v1/demo-login", json={"seat_id": "A001"})
+            self.assertEqual(response.status_code, 200)
 
     def test_demo_login_issues_existing_role_token_only_when_enabled(self) -> None:
         with mock.patch.dict(os.environ, {"APP_DEMO_LOGIN": "1"}):

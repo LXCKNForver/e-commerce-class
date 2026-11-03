@@ -167,7 +167,7 @@ def create_app(context: PlatformContext | None = None) -> FastAPI:
 
     @app.post("/v1/demo-login", include_in_schema=False)
     def demo_login(payload: DemoLoginRequest, request: Request) -> dict[str, str]:
-        if os.getenv("APP_DEMO_LOGIN") != "1" or not request.client or request.client.host not in {"127.0.0.1", "::1", "testclient"}:
+        if os.getenv("APP_DEMO_LOGIN", "1") == "0" or not request.client or request.client.host not in {"127.0.0.1", "::1", "testclient"}:
             raise HTTPException(status_code=404, detail="未找到页面")
         roles = {"A001": ROLE_AGENT, "A002": ROLE_AGENT, "M001": ROLE_SUPERVISOR}
         role = roles.get(payload.seat_id)
