@@ -344,9 +344,19 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(self.registry.calls, [])
         self.assertEqual(result.meta["ticket"]["case_id"], "AS23001")
 
-    def test_ticket_of_other_seat_is_rejected(self) -> None:
-        with self.assertRaises(NotFound):
-            self.service.ask(self.agent, "工单 AS23002 什么状态？", "s1")
+    def test_ticket_of_other_seat_gets_same_answer_as_missing(self) -> None:
+        # 对话层不再把 404 原文弹给客服，但"别人的"和"不存在的"必须字面一致：
+        # 一旦区分，就等于确认了这张工单存在。
+        other = self.service.ask(self.agent, "工单 AS23002 什么状态？", "s1")
+        ghost = self.service.ask(self.agent, "工单 AS99999 什么状态？", "s1")
+        self.assertEqual(other.status, STATUS_NEEDS_HUMAN)
+        self.assertEqual(ghost.status, STATUS_NEEDS_HUMAN)
+        self.assertIn("没找到你能访问的工单", other.answer)
+        self.assertEqual(
+            other.answer.replace("AS23002", "X"),
+            ghost.answer.replace("AS99999", "X"),
+        )
+        self.assertEqual(self.registry.calls, [])
 
     def test_order_route_reads_ledger_without_model(self) -> None:
         # 用户说的"订单 O230701"必须查台账，不能丢给知识库：
@@ -534,10 +544,34 @@ class ApiTest(unittest.TestCase):
         queue = self.client.get("/v1/admin/handoffs", headers=self.headers(self.boss_token)).json()
         self.assertEqual(len(queue["items"]), 1)
 
-    def test_chat_other_seat_ticket_is_404(self) -> None:
+    def test_chat_other_seat_ticket_gets_business_answer(self) -> None:
+        # 对话层给人话（200 + needs_human），接口层读单张工单仍按 HTTP 语义回 404。
         body = {"question": "工单 AS23002 现在是什么状态？", "session_id": "s-api"}
         response = self.client.post("/v1/chat", json=body, headers=self.headers(self.agent_token))
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "needs_human")
+        self.assertIn("没找到你能访问的工单", payload["answer"])
+        self.assertEqual(
+            self.client.get("/v1/tickets/AS23002", headers=self.headers(self.agent_token)).status_code,
+            404,
+        )
+
+    def test_pick_port_moves_away_from_a_busy_one(self) -> None:
+        # 上一个工作台还开着时，uvicorn 会 Errno 10048 + exit 3，看起来像启动失败。
+        import socket
+
+        from app.api import _pick_port, _port_busy
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
+            busy = sock.getsockname()[1]
+            self.assertTrue(_port_busy("127.0.0.1", busy))
+            picked = _pick_port("127.0.0.1", busy)
+            self.assertIsNotNone(picked)
+            self.assertNotEqual(picked, busy)
+            self.assertFalse(_port_busy("127.0.0.1", picked))
 
     def test_admin_routes_are_forbidden_for_agent(self) -> None:
         for path in ("/v1/admin/handoffs", "/v1/admin/feedback", "/v1/admin/audit", "/v1/admin/stats"):

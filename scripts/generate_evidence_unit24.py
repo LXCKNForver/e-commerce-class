@@ -159,6 +159,21 @@ def main() -> None:
     perm.append(f"  A001 读 A002 的 {other.case_id}：HTTP {denied.status_code} {denied.json()['detail']}")
     allowed = client.get(f"/v1/tickets/{other.case_id}", headers=hb)
     perm.append(f"  M001 读同一张：HTTP {allowed.status_code}（主管可见全部）")
+    chat_denied = client.post(
+        "/v1/chat",
+        json={"question": f"工单 {other.case_id} 现在是什么状态？", "session_id": "ev-perm"},
+        headers=ha,
+    )
+    chat_payload = chat_denied.json()
+    first_line = chat_payload["answer"].splitlines()[0]
+    perm.append(
+        f"  A001 在对话里问同一张：HTTP {chat_denied.status_code}，状态 {chat_payload['status']}，"
+        f"答复「{first_line[:48]}…」"
+    )
+    perm.append(
+        "  说明：接口层（/v1/tickets/{id}）按 HTTP 语义回 404；对话层换成同一句话术，"
+        "「号写错」与「在别人名下」字面一致，不确认这张单是否存在。"
+    )
     perm.append(f"  A001 调 /v1/admin/stats：HTTP {client.get('/v1/admin/stats', headers=ha).status_code}")
     perm.append(f"  M001 调 /v1/admin/stats：HTTP {client.get('/v1/admin/stats', headers=hb).status_code}")
     sections.append(fence("## 五、权限：客服只看自己名下，主管看全部", "\n".join(perm)))
@@ -249,7 +264,7 @@ def main() -> None:
         f"接口可用\t/v1/me、/v1/chat、/v1/tickets、/v1/dashboard、/v1/admin/* 均返回 JSON\t通过",
         f"有数据\t工单台账 32 张、坐席 5 个、知识库 {context.knowledge_count} 条、FAQ {context.faq_rows} 行\t通过",
         f"身份隔离\tA001 见 {len(data.visible_tickets(verify_token(agent_token, root=ROOT)))} 张、"
-        f"M001 见 {len(data.visible_tickets(boss_principal))} 张；跨坐席 404\t通过",
+        f"M001 见 {len(data.visible_tickets(boss_principal))} 张；跨坐席接口 404、对话回同一话术\t通过",
         "不让模型编事实\t工单/订单/FAQ/统计四类路由不调模型，答复只报已取到的字段\t通过",
         "订单号也能查\tO230701 → 1 张工单（0 ms 不调模型）；SO-2001 这种写法给格式提示\t通过",
         "闭环完整\t提问 → 反馈 → 转人工 → 主管处理 → 审计，全部落库\t通过",

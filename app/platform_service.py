@@ -39,7 +39,7 @@ from app.platform_data import (
     extract_orderish,
     extract_ticket_id,
 )
-from app.platform_errors import BadRequest
+from app.platform_errors import BadRequest, NotFound
 from app.platform_runtime import PlatformContext
 
 STATUS_ANSWERED = "answered"
@@ -205,7 +205,12 @@ class PlatformService:
     def _answer_one_ticket(
         self, principal: Principal, case_id: str
     ) -> tuple[str, str, list[dict], dict]:
-        ticket = self.context.data.read_ticket(principal, case_id)
+        try:
+            ticket = self.context.data.read_ticket(principal, case_id)
+        except NotFound:
+            # 接口层照样回 404（给程序看），但对话里得给人话：
+            # 气泡里弹"请求失败：未找到可访问的工单"，客服只会以为系统坏了。
+            return self._answer_missing_ticket(case_id)
         answer = (
             f"工单 {ticket.case_id} 当前状态：{ticket.status}。"
             f"优先级：{ticket.priority}；问题类型：{ticket.issue_type}；"
@@ -218,11 +223,34 @@ class PlatformService:
         }]
         return answer, STATUS_ANSWERED, sources, {"ticket": ticket.as_dict()}
 
+    def _answer_missing_ticket(
+        self, case_id: str
+    ) -> tuple[str, str, list[dict], dict]:
+        """查不到可访问的工单：一句人话，不是 404 原文。
+
+        这句对"号写错了"和"号在别人名下"**字面完全一致**——一旦区分，
+        等于告诉客服"这张单存在，只是不给你看"，归属就漏了。
+        """
+        answer = (
+            f"没找到你能访问的工单 {case_id}。常见原因有两个：工单号记错了"
+            "（本组是 AS 加五位，例如 AS23001），或者这张工单在别的坐席名下"
+            "——那种情况只有主管账号能看到。\n"
+            "如果确认这张单存在，可以转人工，让主管核对归属。"
+        )
+        sources = [{
+            "source": self.context.data.ledger_path.name,
+            "excerpt": f"本席可见的工单里没有 {case_id}",
+        }]
+        return answer, STATUS_NEEDS_HUMAN, sources, {"missing": case_id}
+
     def _answer_order(
         self, principal: Principal, order_id: str
     ) -> tuple[str, str, list[dict], dict]:
         """按订单号查：一个订单可能挂着多张工单，逐条列出来。"""
-        tickets = self.context.data.tickets_of_order(principal, order_id)
+        try:
+            tickets = self.context.data.tickets_of_order(principal, order_id)
+        except NotFound:
+            return self._answer_missing_order(order_id)
         head = (f"订单 {order_id} 名下 1 张工单：{tickets[0].case_id}。"
                 if len(tickets) == 1
                 else f"订单 {order_id} 名下 {len(tickets)} 张工单：")
@@ -244,6 +272,21 @@ class PlatformService:
             sources,
             {"order_id": order_id, "tickets": [item.as_dict() for item in tickets]},
         )
+
+    def _answer_missing_order(
+        self, order_id: str
+    ) -> tuple[str, str, list[dict], dict]:
+        answer = (
+            f"没找到你能访问的订单 {order_id} 名下的工单。常见原因有两个：订单号记错了"
+            "（本组是 O 加六位，例如 O230701），或者这单在别的坐席名下——"
+            "那种情况只有主管账号能看到。\n"
+            "如果确认这单存在，可以转人工，让主管核对归属。"
+        )
+        sources = [{
+            "source": self.context.data.ledger_path.name,
+            "excerpt": f"本席可见的工单里没有订单 {order_id}",
+        }]
+        return answer, STATUS_NEEDS_HUMAN, sources, {"missing_order": order_id}
 
     def _answer_order_code_hint(
         self, principal: Principal, code: str

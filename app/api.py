@@ -330,6 +330,34 @@ def demo_tokens() -> dict[str, str]:
     }
 
 
+def _port_busy(host: str, port: int) -> bool:
+    """端口能不能绑上；绑不上就是有人（或上一次没退干净的服务）在听。"""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return True
+    return False
+
+
+def _pick_port(host: str, port: int) -> int | None:
+    """优先用要求的端口；被占就往后挪，挪不到再放弃。
+
+    课堂现场最常见的失败不是代码错，而是**上一个工作台还开着**：
+    uvicorn 报 `[Errno 10048]` 然后 exit 3，看起来像启动失败。
+    这里自己挑一个能用的端口，并说清"原来的端口被谁占了"。
+    """
+    for candidate in (port, port + 1, port + 2, port + 21):
+        if not _port_busy(host, candidate):
+            if candidate != port:
+                print(f"提示：{port} 端口已被占用（可能已经有一个工作台在跑），改用 {candidate}。")
+                print(f"      想继续用 {port} 的话，先把那个服务关掉（关掉它的终端，或结束占用进程）。\n")
+            return candidate
+    return None
+
+
 def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
     """启动服务：先装配一次并打印"装了什么 + 两个演示令牌"，再起 uvicorn。
 
@@ -342,6 +370,10 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
     from app.platform_runtime import prepare_platform, render_context
 
     port = int(os.getenv("APP_PORT", port))
+    port = _pick_port(host, port)
+    if port is None:
+        print("8000—8002 与 8021 都被占用，请用 --port 指定一个空闲端口（例如 --port 8030）。")
+        return
     context = prepare_platform()
     tokens = demo_tokens()
     print(render_context(context))

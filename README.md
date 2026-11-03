@@ -38,6 +38,8 @@ uv run --extra web python main.py --serve 8021     # 换端口（也可写 --por
 uv run --extra web python main.py --issue-token A002 --role agent   # 只签一个令牌
 ```
 
+8000 已经被上一个工作台占着时，它不会再报 `[Errno 10048]` 直接退出，而是自动改用 8001 / 8002 / 8021，并打印一句"原来的端口已被占用"——命令行里最常见的一次启动失败就是这个。
+
 `--extra embedding`（单元06 向量模型）与 `--extra chroma`（单元07—10 向量库）都是可选依赖。只跑单元 02—05 时 `uv sync` 即可，其余命令不受影响。
 
 单元06 的中文向量模型约 180MB，放在 `models/`，已用 `.gitignore` 排除、不随仓库分发；换电脑时在 `.env` 里设置 `EMBEDDING_MODEL_DIR` 指向课程材料的 `models/` 目录即可，仍保持离线加载、不联网下载。
@@ -265,7 +267,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/platform_errors.py`：单元24 业务层异常（`NotFound` / `BadRequest`，由接口层翻译成 404 / 422）。
 - `app/api.py`：单元24 接口层（12 条路由、`HTTPBearer` 取令牌、错误映射、`create_app`、`serve`）。
 - `web/index.html`：单元24 单页前端（对话 / 工单台账 / 数据看板 / 管理台四个视图，零 CDN、零构建步骤）。
-- `tests/`：单元01—24 单元测试，805 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—23 另需 `langchain`、单元24 的接口测试另需 `web`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
+- `tests/`：单元01—24 单元测试，806 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—23 另需 `langchain`、单元24 的接口测试另需 `web`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
