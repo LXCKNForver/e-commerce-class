@@ -236,7 +236,7 @@
       <div class="sec-head">
         <div>
           <h2>智能服务对话</h2>
-          <p>工单号走结构化查询，统计问题走固定算子，其余问题检索本组资料后由模型作答；资料不足会如实说"不知道"并建议转人工。</p>
+          <p>工单号、订单号走结构化查询，统计问题走固定算子，其余问题检索本组资料后由模型作答；资料不足会如实说"不知道"并建议转人工。</p>
         </div>
         <div class="right">
           <span class="chip" id="session-chip">会话未开始</span>
@@ -468,7 +468,11 @@ function addMeta(wrap, result){
     const box = document.createElement('div');
     box.className = 'src';
     const title = document.createElement('b');
-    title.textContent = '依据（' + sources.length + ' 条）';
+    // 资料不足时这 3 条只是"最像的"，不是"依据"——标题不分开写，
+    // 上面说"无法确认"、下面列"依据 3 条"，读起来像自相矛盾。
+    title.textContent = result.status === 'needs_human'
+      ? '最相近资料（' + sources.length + ' 条，不足以作为依据）'
+      : '依据（' + sources.length + ' 条）';
     box.append(title);
     const list = document.createElement('ol');
     for (const item of sources){

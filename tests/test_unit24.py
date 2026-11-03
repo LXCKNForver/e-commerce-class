@@ -37,6 +37,8 @@ from app.platform_auth import (
 from app.platform_data import (
     LEDGER_FILE,
     PlatformData,
+    extract_order_id,
+    extract_orderish,
     extract_ticket_id,
     render_seat_table,
 )
@@ -185,6 +187,27 @@ class TicketDataTest(unittest.TestCase):
         # 六位数字不是本项目的工单号：AS230041 不应该被截成 AS23004 命中
         self.assertIsNone(extract_ticket_id("AS230041"))
 
+    def test_order_id_extraction(self) -> None:
+        self.assertEqual(extract_order_id("订单 O230701 退款到哪了"), "O230701")
+        self.assertEqual(extract_order_id("o230704"), "O230704")
+        # SO-2001 / NO2024 是"像订单号但台账里没有"的写法，严格匹配必须取不到，
+        # 宽松匹配要能取出来用于给格式提示——两者分工不能混。
+        self.assertIsNone(extract_order_id("我要查订单 SO-2001"))
+        self.assertEqual(extract_orderish("我要查订单 SO-2001"), "SO-2001")
+        self.assertIsNone(extract_orderish("退款要几天到账"))
+
+    def test_order_lookup_respects_seat(self) -> None:
+        mine = next(row for row in self.data.tickets if row.seat_id == "A001")
+        found = self.data.tickets_of_order(seat("A001"), mine.order_id)
+        self.assertEqual([row.case_id for row in found], [mine.case_id])
+        # 同一张订单换别人来查：与非存在同一个结果
+        other = next(row for row in self.data.tickets if row.seat_id == "A002")
+        with self.assertRaises(NotFound):
+            self.data.tickets_of_order(seat("A001"), other.order_id)
+        self.assertEqual(len(self.data.tickets_of_order(seat("M001", ROLE_SUPERVISOR), other.order_id)), 1)
+        with self.assertRaises(BadRequest):
+            self.data.tickets_of_order(seat("A001"), "SO-2001")
+
     def test_agent_sees_only_own_tickets(self) -> None:
         mine = self.data.visible_tickets(seat("A001"))
         self.assertEqual(len(mine), 8)
@@ -324,6 +347,25 @@ class ServiceTest(unittest.TestCase):
     def test_ticket_of_other_seat_is_rejected(self) -> None:
         with self.assertRaises(NotFound):
             self.service.ask(self.agent, "工单 AS23002 什么状态？", "s1")
+
+    def test_order_route_reads_ledger_without_model(self) -> None:
+        # 用户说的"订单 O230701"必须查台账，不能丢给知识库：
+        # 知识库只有政策文档，检索出来只会答"资料不足"。
+        result = self.service.ask(self.agent, "订单 O230701 退到哪一步了？", "s1")
+        self.assertEqual(result.route, ROUTE_TICKET)
+        self.assertEqual(result.status, STATUS_ANSWERED)
+        self.assertIn("AS23001", result.answer)
+        self.assertEqual(self.registry.calls, [])
+
+    def test_wrong_order_format_explains_the_shape(self) -> None:
+        # 截图里那句"SO-2001 → 资料不足"就是缺了这一段：
+        # 格式不对也要给"台账里长什么样"，而不是让模型说不知道。
+        result = self.service.ask(self.agent, "我要查订单 SO-2001", "s1")
+        self.assertEqual(result.route, ROUTE_TICKET)
+        self.assertEqual(result.status, STATUS_NEEDS_HUMAN)
+        self.assertIn("O 加六位数字", result.answer)
+        self.assertIn("AS23004", result.answer)
+        self.assertEqual(self.registry.calls, [])
 
     def test_render_context_tolerates_temp_session_db(self) -> None:
         # 验收脚本用临时会话库；装配摘要不能因为"路径不在仓库里"就崩。

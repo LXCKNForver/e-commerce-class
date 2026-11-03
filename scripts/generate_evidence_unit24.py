@@ -119,6 +119,8 @@ def main() -> None:
     route_lines = [render_routes(), "", "实测（A001 客服坐席，逐条调用 /v1/chat）："]
     cases = [
         ("工单 AS23001 现在是什么状态？", "ticket"),
+        ("订单 O230701 退到哪一步了？", "ticket"),
+        ("我要查订单 SO-2001", "ticket"),
         ("EC-FAQ-01 的标准答复是什么？", "faq"),
         ("各类售后问题各多少单？", "analysis"),
         ("需要转人工的工单有多少？", "analysis"),
@@ -135,6 +137,12 @@ def main() -> None:
             f"{'（与预期一致）' if payload.get('route') == expected else '（与预期不符）'}\n"
             f"      答复：{answer[:160]}…"
         )
+    route_lines += [
+        "",
+        "订单号是 ticket 路由的第二种入口：台账格式（O + 六位数字）直接按 order_id 查；",
+        "写成 SO-2001 这种格式取不到时，先说明台账里长什么样，而不是让模型去知识库里捞。",
+        "两条都实测 0—1 ms，说明模型一次没被叫到。",
+    ]
     sections.append(fence("## 四、四路由：谁在算、模型有没有被叫到", "\n".join(route_lines)))
 
     # ---------------------------------------------------------------- 五、权限
@@ -242,7 +250,8 @@ def main() -> None:
         f"有数据\t工单台账 32 张、坐席 5 个、知识库 {context.knowledge_count} 条、FAQ {context.faq_rows} 行\t通过",
         f"身份隔离\tA001 见 {len(data.visible_tickets(verify_token(agent_token, root=ROOT)))} 张、"
         f"M001 见 {len(data.visible_tickets(boss_principal))} 张；跨坐席 404\t通过",
-        "不让模型编事实\t工单/FAQ/统计三类路由不调模型，答复只报已取到的字段\t通过",
+        "不让模型编事实\t工单/订单/FAQ/统计四类路由不调模型，答复只报已取到的字段\t通过",
+        "订单号也能查\tO230701 → 1 张工单（0 ms 不调模型）；SO-2001 这种写法给格式提示\t通过",
         "闭环完整\t提问 → 反馈 → 转人工 → 主管处理 → 审计，全部落库\t通过",
         "离线可跑\t页面无 CDN；LLM_PROVIDER=mock 时全流程不需要外网\t通过",
     ]

@@ -82,7 +82,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元23 换的是**让模型碰数据、但不让它碰执行**：本单元目标写得很直白——Agent 安全读取项目 CSV，完成指定统计并用业务语言解释结果，**不执行任意生成代码**。守住这条的是三道设计：第一，模型两次发言都不碰数据本体——第一次只给它数据字典、字段白名单和 8 个固定算子（`count / sum / mean / max / min / group_count / group_sum / group_mean`），它只能回一个 JSON 口径（`{"metric": ..., "field": ..., "filters": {...}}`），**看不到一行数据、拿不到文件路径**；第二次只给它 Python 已经算好的结果，让它翻译成业务语言。第二，真正的加法全在 `compute()` 的 8 个分支里，模型想塞一段表达式（比如 `sum(x for x in rows)`）会被当成"未知算子"拒掉，`app/data_agent.py` 里没有 `eval(` / `exec(` / `__import__(`（有一条测试用 `inspect.getsource` 盯着）。第三，写完解释还有一道 `check_explanation`：每个带单位的数字都要能在结果里找到出处，找不到就点名列出——模型可以说"物流异常 8 单（25.0%）"，但不能自己造一个 8。**字段白名单的意义是"列存在 ≠ 可以统计"**：`case_id`、`order_id` 在表里真的有，但统计编号没有业务含义、还可能泄露客户信息，一律在统计之前拒绝（统计 0 次，连解释都不调）。**空值与非数字既不静默当 0，也不整行丢弃**：脏样本里跳过 3 行、参与 29 行，均值 162.34 元（当成 0 算只有 147.12），分组字段为空则归入「（空值）」组，行数一条都对得上。每个结果都带四行行数（总 / 筛选后 / 参与 / 跳过）+ 一条含除号的算式 + 前 5 行抽样，可以直接拿计算器复核。命令是 `/data`（最小场景）、`/data schema`（数据字典与白名单）、`/data refund`（数值聚合）、`/data handoff`（带筛选计数）、`/data dirty`（空值与非数字）、`/data forbidden`（越权字段）、`/data missing`（筛选后 0 行）、`/data bad`（守门）、`/data demo`（按任务卡四节课跑完）。
 
-单元24 换的是**产品形态**：前面 23 个单元都是命令行里的一次运行，本单元把检索、模型问答与业务查询装成一个**能独立运行的网页产品**——客服登录后查本人名下工单、做知识问答、给答复打反馈或转人工；主管在同一网页看反馈、转人工队列与调用记录，并确认人工处理。分层是接口层 `app/api.py`（只验身份、收参数，把 `NotFound` / `BadRequest` 翻译成 404 / 422）→ 业务层 `app/platform_service.py`（四路由分派与编排）→ 数据层（`app/platform_data.py` 读只读台账并做权限收窄、`app/platform_store.py` 落四张表），前端是 `web/index.html` 一个文件、**零 CDN、零构建步骤**。最关键的一条是**路由不交给模型**：工单号 `AS\d{5}` → ticket（Python 读 CSV）、`EC-FAQ-\d{2}` → faq（SQLite 参数化查询）、统计关键词 → analysis（复用单元23 的固定算子），这三类**一次模型都不调**（实测 0 / 1 / 1 ms），只有剩下的知识问答才调 1 次模型且只喂命中的资料。第二条是**不泄露“存在性”**：客服问别人的工单回 `404 未找到可访问的工单`，与“不存在”同一个结果，权限写进 SQL 的 `WHERE seat_id=?`，不是接口层顺手加个 if。第三条是**数字可复核**：数据看板不吐一个数字，而是把单元23 的行数链与算式一起回给页面（「物流异常 8（25.0%）…共 32 行」「占比 = 该组单数 ÷ 32」「退款合计 5544 元 = 32 行有效数值相加」）。身份是课堂用的 HMAC 签名令牌（`base64url(payload).base64url(HMAC-SHA256)`，8 小时有效，密钥在 `.runtime/token_secret` 首次自动生成），页面只把令牌放进 `sessionStorage`，关掉标签页即失效。四张表分开：`turns` 存问答、`audit` 只存路由/耗时/来源数（**不含问题正文**）、`feedback` 存评价、`handoffs` 存转人工状态；转人工只进队列，**不改写业务工单**（台账仍是只读 CSV）。命令是 `python main.py --serve`（页面 + 接口）、`/serve [端口]`（交互式里起服务）、`--issue-token A002 --role agent`（单签令牌）、`--init-secret`（只生成密钥）。
+单元24 换的是**产品形态**：前面 23 个单元都是命令行里的一次运行，本单元把检索、模型问答与业务查询装成一个**能独立运行的网页产品**——客服登录后查本人名下工单、做知识问答、给答复打反馈或转人工；主管在同一网页看反馈、转人工队列与调用记录，并确认人工处理。分层是接口层 `app/api.py`（只验身份、收参数，把 `NotFound` / `BadRequest` 翻译成 404 / 422）→ 业务层 `app/platform_service.py`（四路由分派与编排）→ 数据层（`app/platform_data.py` 读只读台账并做权限收窄、`app/platform_store.py` 落四张表），前端是 `web/index.html` 一个文件、**零 CDN、零构建步骤**。最关键的一条是**路由不交给模型**：工单号 `AS\d{5}` → ticket（Python 读 CSV）、订单号 `O\d{6}` → ticket（同一份台账按 `order_id` 查，一个订单可能挂多张工单；写成 `SO-2001` 这种取不到的格式也会被接住，直接告诉你台账是 O + 六位数字）、`EC-FAQ-\d{2}` → faq（SQLite 参数化查询）、统计关键词 → analysis（复用单元23 的固定算子），这些**一次模型都不调**（实测 0 / 1 / 1 ms），只有剩下的知识问答才调 1 次模型且只喂命中的资料。第二条是**不泄露“存在性”**：客服问别人的工单回 `404 未找到可访问的工单`，与“不存在”同一个结果，权限写进 SQL 的 `WHERE seat_id=?`，不是接口层顺手加个 if。第三条是**数字可复核**：数据看板不吐一个数字，而是把单元23 的行数链与算式一起回给页面（「物流异常 8（25.0%）…共 32 行」「占比 = 该组单数 ÷ 32」「退款合计 5544 元 = 32 行有效数值相加」）。身份是课堂用的 HMAC 签名令牌（`base64url(payload).base64url(HMAC-SHA256)`，8 小时有效，密钥在 `.runtime/token_secret` 首次自动生成），页面只把令牌放进 `sessionStorage`，关掉标签页即失效。四张表分开：`turns` 存问答、`audit` 只存路由/耗时/来源数（**不含问题正文**）、`feedback` 存评价、`handoffs` 存转人工状态；转人工只进队列，**不改写业务工单**（台账仍是只读 CSV）。命令是 `python main.py --serve`（页面 + 接口）、`/serve [端口]`（交互式里起服务）、`--issue-token A002 --role agent`（单签令牌）、`--init-secret`（只生成密钥）。
 
 默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit16/`、`.chroma_unit24/`、`.sqlite_unit15/`、`.sqlite_unit24/`、`.runtime/`（单元24 的签名密钥与会话库）、`rag_monitor.sqlite3` 不会提交到 GitHub。
 
@@ -261,11 +261,11 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/platform_data.py`：单元24 工单台账（三份 CSV 的 join、`extract_ticket_id`、按坐席收窄的 `list_tickets` / `read_ticket`、`overview` 口径、坐席表）。
 - `app/platform_store.py`：单元24 会话库（`turns` / `audit` / `feedback` / `handoffs` 四张表、反馈覆盖、转人工生命周期、审计不含正文、管理台统计）。
 - `app/platform_runtime.py`：单元24 装配（模型 + 工具注册表 + 检索 + 会话库 + 台账 + 知识库索引 + FAQ 同步，启动摘要 `render_context`）。
-- `app/platform_service.py`：单元24 业务编排（`route_of` 四路由、工单/FAQ/统计/知识四个 handler、看板聚合、`render_routes`）。
+- `app/platform_service.py`：单元24 业务编排（`route_of` 四路由、工单/订单/FAQ/统计/知识五个 handler、看板聚合、`render_routes`）。
 - `app/platform_errors.py`：单元24 业务层异常（`NotFound` / `BadRequest`，由接口层翻译成 404 / 422）。
 - `app/api.py`：单元24 接口层（12 条路由、`HTTPBearer` 取令牌、错误映射、`create_app`、`serve`）。
 - `web/index.html`：单元24 单页前端（对话 / 工单台账 / 数据看板 / 管理台四个视图，零 CDN、零构建步骤）。
-- `tests/`：单元01—24 单元测试，801 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—23 另需 `langchain`、单元24 的接口测试另需 `web`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
+- `tests/`：单元01—24 单元测试，805 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—23 另需 `langchain`、单元24 的接口测试另需 `web`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -286,7 +286,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元21验收证据.md`：单元21 的真实运行记录（架构与角色表、真实模型跑一次完整协作、每角色输入输出字段、评审修订、二次拒绝停止交付、证据不足、执行终止、无效输入、三条标准逐条验收，脚本抓取）。
 - `docs/单元22验收证据.md`：单元22 的真实运行记录（群聊结构与角色表、真实模型跑一次完整协作、逐位核对每人读到的提示词、轮次上限、成本上限、复核不通过、多轮往复、证据不足、无效任务与越界参数、四条标准逐条验收，脚本抓取）。
 - `docs/单元23验收证据.md`：单元23 的真实运行记录（数据字典与白名单、真实模型跑一次完整分析、两次调用各自读到什么、数值与筛选、脏数据、越权字段、筛选后 0 行、三道守门、不执行生成代码的源码核对、四条标准逐条验收，脚本抓取）。
-- `docs/单元24验收证据.md`：单元24 的真实运行记录（装配、台账与坐席、令牌签发/篡改/过期、四路由实测、权限隔离、闭环九步、数据看板口径、页面结构与外部依赖、启动方式、七条标准逐条验收，脚本抓取）。
+- `docs/单元24验收证据.md`：单元24 的真实运行记录（装配、台账与坐席、令牌签发/篡改/过期、四路由实测、权限隔离、闭环九步、数据看板口径、页面结构与外部依赖、启动方式、八条标准逐条验收，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。

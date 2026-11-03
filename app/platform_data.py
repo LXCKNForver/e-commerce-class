@@ -25,6 +25,14 @@ from app.platform_errors import BadRequest, NotFound
 # 工单号形如 AS23001：中文紧邻字母时 `\b` 不成立，所以用显式的"前后不是字母数字"。
 TICKET_PATTERN = re.compile(r"(?<![A-Za-z0-9])AS\d{5}(?!\d)", re.IGNORECASE)
 
+# 订单号形如 O230701。用户也常写 SO-2001、NO2024 这类格式，那是**查不到**的写法，
+# 但仍属"查订单"，必须先接住再解释；否则会掉进知识问答，检索出一堆提到"订单编号"
+# 的政策片段，模型只能答"资料不足"——用户看到的就是"明明检索到 3 条却说没有"。
+ORDER_PATTERN = re.compile(r"(?<![A-Za-z0-9])O\d{6}(?![0-9])", re.IGNORECASE)
+ORDERISH_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:SO|SN|NO|ORDER)[-\s]?\d{3,8}(?![0-9])", re.IGNORECASE
+)
+
 LEDGER_FILE = "售后工单台账.csv"
 ASSIGN_FILE = "坐席分工.csv"
 SEAT_FILE = "坐席.csv"
@@ -42,6 +50,18 @@ STATUS_ORDER = ("处理中", "人工复核", "已退款", "已关闭")
 def extract_ticket_id(text: str) -> str | None:
     """从"帮我看下工单 AS23004 的状态"里取出工单号；取不到返回 None。"""
     match = TICKET_PATTERN.search(text or "")
+    return match.group(0).upper() if match else None
+
+
+def extract_order_id(text: str) -> str | None:
+    """取出台账格式的订单号（O + 六位数字）；取不到返回 None。"""
+    match = ORDER_PATTERN.search(text or "")
+    return match.group(0).upper() if match else None
+
+
+def extract_orderish(text: str) -> str | None:
+    """宽松取一个"像订单号"的写法，只用来给格式提示，绝不拿去查台账。"""
+    match = ORDERISH_PATTERN.search(text or "")
     return match.group(0).upper() if match else None
 
 
@@ -184,6 +204,21 @@ class PlatformData:
             # 与"不存在"同一个结果：不泄露别人的工单是否存在。
             raise NotFound("未找到可访问的工单")
         return ticket
+
+    def tickets_of_order(self, principal: Principal, order_id: str) -> list[Ticket]:
+        """按订单号读该订单名下的工单；一个订单可能对应多张。
+
+        不在名下与不存在仍回同一个 404——订单归属同样不能泄露。
+        """
+        key = (order_id or "").strip().upper()
+        if not ORDER_PATTERN.fullmatch(key):
+            raise BadRequest("订单号格式应为 O 加六位数字，例如 O230701")
+        hits = [ticket for ticket in self.tickets if ticket.order_id.upper() == key]
+        if not can_view_all(principal):
+            hits = [ticket for ticket in hits if ticket.seat_id == principal.seat_id]
+        if not hits:
+            raise NotFound("未找到可访问的工单")
+        return hits
 
     def list_tickets(
         self,

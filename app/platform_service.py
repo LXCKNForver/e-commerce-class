@@ -3,6 +3,7 @@
 四类问题走四条路，**路由规则不交给模型**：
 
     工单号 AS23004      → 结构化查询：Python 按固定路径读台账，先校验归属
+    订单号 O230701      → 结构化查询：同一个台账按 order_id 查，一个订单可能多张工单
     FAQ 编号 EC-FAQ-01  → 结构化查询：SQLite 参数化查询，取标准答复
     "统计/多少单/占比"  → 数据分析：复用单元23 的固定算子，算完把行数与算式一起给
     其余问题            → 知识问答：检索本组资料 → 交给模型，只依据命中内容作答
@@ -29,7 +30,15 @@ from app.data_agent import (
     load_table,
 )
 from app.platform_auth import Principal
-from app.platform_data import TICKET_PATTERN, Ticket, extract_ticket_id
+from app.platform_data import (
+    ORDERISH_PATTERN,
+    ORDER_PATTERN,
+    TICKET_PATTERN,
+    Ticket,
+    extract_order_id,
+    extract_orderish,
+    extract_ticket_id,
+)
 from app.platform_errors import BadRequest
 from app.platform_runtime import PlatformContext
 
@@ -123,6 +132,11 @@ class PlatformService:
             return ROUTE_TICKET
         if FAQ_PATTERN.search(question):
             return ROUTE_FAQ
+        # 订单号也归结构化查询，而且必须排在统计关键词之前：
+        # "订单 O230701 退了多少"要查这张单，不是要一份全表汇总。
+        # 格式写错的（SO-2001）同样接住——先解释格式，别丢给知识库瞎检索。
+        if ORDER_PATTERN.search(question) or ORDERISH_PATTERN.search(question):
+            return ROUTE_TICKET
         if any(keyword in question for keyword in ANALYSIS_KEYWORDS):
             return ROUTE_ANALYSIS
         # "转人工的工单有多少？"里没有一个词在关键词表里，但它是地道的统计问法：
@@ -180,7 +194,18 @@ class PlatformService:
         self, principal: Principal, question: str, session_id: str
     ) -> tuple[str, str, list[dict], dict]:
         case_id = extract_ticket_id(question)
-        ticket = self.context.data.read_ticket(principal, case_id or "")
+        if case_id:
+            return self._answer_one_ticket(principal, case_id)
+        order_id = extract_order_id(question)
+        if order_id:
+            return self._answer_order(principal, order_id)
+        # 走到这里说明是"SO-2001"这类像订单号、但台账里不存在的写法。
+        return self._answer_order_code_hint(principal, extract_orderish(question) or "")
+
+    def _answer_one_ticket(
+        self, principal: Principal, case_id: str
+    ) -> tuple[str, str, list[dict], dict]:
+        ticket = self.context.data.read_ticket(principal, case_id)
         answer = (
             f"工单 {ticket.case_id} 当前状态：{ticket.status}。"
             f"优先级：{ticket.priority}；问题类型：{ticket.issue_type}；"
@@ -192,6 +217,54 @@ class PlatformService:
             "excerpt": f"{ticket.case_id} · 坐席 {ticket.seat_id} · {ticket.status}",
         }]
         return answer, STATUS_ANSWERED, sources, {"ticket": ticket.as_dict()}
+
+    def _answer_order(
+        self, principal: Principal, order_id: str
+    ) -> tuple[str, str, list[dict], dict]:
+        """按订单号查：一个订单可能挂着多张工单，逐条列出来。"""
+        tickets = self.context.data.tickets_of_order(principal, order_id)
+        head = (f"订单 {order_id} 名下 1 张工单：{tickets[0].case_id}。"
+                if len(tickets) == 1
+                else f"订单 {order_id} 名下 {len(tickets)} 张工单：")
+        lines = [head]
+        for ticket in tickets:
+            lines.append(
+                f"· {ticket.case_id}｜状态 {ticket.status}｜{ticket.issue_type}"
+                f"｜退款 {_money(ticket.refund_amount)} 元"
+                f"｜坐席 {ticket.seat_id} {ticket.seat_name}｜更新 {ticket.updated_at}"
+            )
+        lines.append("以上均为台账只读字段；退款结论以系统记录为准，这里不做推测。")
+        sources = [{
+            "source": self.context.data.ledger_path.name,
+            "excerpt": f"{order_id} → " + "、".join(item.case_id for item in tickets),
+        }]
+        return (
+            "\n".join(lines),
+            STATUS_ANSWERED,
+            sources,
+            {"order_id": order_id, "tickets": [item.as_dict() for item in tickets]},
+        )
+
+    def _answer_order_code_hint(
+        self, principal: Principal, code: str
+    ) -> tuple[str, str, list[dict], dict]:
+        """格式不对的订单号：说清台账里长什么样，别让它变成"资料不足"。
+
+        这一步不查库、不回 404——编号本身不是敏感信息，用户需要的是"怎么写才对"。
+        """
+        visible = self.context.data.visible_tickets(principal)
+        example = visible[0].order_id if visible else "O230701"
+        answer = (
+            f"没在台账里按「{code}」这个写法查到订单。本组订单号是 O 加六位数字"
+            f"（例如 {example}），工单号是 AS 加五位数字（例如 AS23004）。\n"
+            "如果你手上是订单号，换成台账格式再发我一次，我直接查它下面挂着哪张工单；"
+            "如果确认是别的系统的单号，建议转人工核对。"
+        )
+        sources = [{
+            "source": self.context.data.ledger_path.name,
+            "excerpt": f"台账订单号示例：{example}（格式 O+6 位）",
+        }]
+        return answer, STATUS_NEEDS_HUMAN, sources, {"order_code": code}
 
     def _answer_faq(
         self, principal: Principal, question: str, session_id: str
@@ -380,6 +453,7 @@ def render_routes() -> str:
     """第2节课要讲的四路由表；文档直接引用。"""
     lines = ["问题形态\t路由\t谁在算\t会不会调模型"]
     lines.append("含工单号 AS23004\tticket\tPython 读台账（先验归属）\t不调")
+    lines.append("含订单号 O230701（或写错格式的 SO-2001）\tticket\t同一台账按 order_id 查\t不调")
     lines.append("含 FAQ 编号 EC-FAQ-01\tfaq\tSQLite 参数化查询\t不调")
     lines.append("统计 / 多少单 / 占比\tanalysis\t单元23 的固定算子\t不调")
     lines.append("其余业务问题\tknowledge\t检索 + 模型（只依据命中资料）\t调 1 次")
