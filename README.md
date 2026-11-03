@@ -1,6 +1,6 @@
 # 电商售后服务智能体
 
-李省春小组的 Python 课堂项目。在老师发放的“项目起始模板”代码骨架之上，已按电商任务卡实现第 02—16 单元：多轮对话与流式输出、Prompt 模板与同题对比、订单工具调用闭环、工具注册表与调度器、售后文本向量化与相似度排序、向量库选型与 Chroma 空集合建库、售后资料批量写入与项目内检索、可复用检索服务（Top-K／来源过滤／批量）、RAG 问答闭环（无证据拒答／编号上下文／真实生成／引用核验）、检索侧优化（重叠分块与本地重排）、多格式知识库解析、RAG 评估与监控（两类指标 + SQLite 日志），ReAct Agent（模型提动作、Python 执行检索、观察回填对话、max_steps 控制停止）与 Agent 工具集（三项只读工具 + 白名单 + 结构化查询 + 计算工具），以及 LangChain 核心（Runnable + Prompt + ChatDeepSeek + StrOutputParser 组合成链，同题对照旧 Agent）。所有数据均为课程虚构样例，只读，不接真实电商系统。
+李省春小组的 Python 课堂项目。在老师发放的“项目起始模板”代码骨架之上，已按电商任务卡实现第 02—24 单元：多轮对话与流式输出、Prompt 模板与同题对比、订单工具调用闭环、工具注册表与调度器、售后文本向量化与相似度排序、向量库选型与 Chroma 空集合建库、售后资料批量写入与项目内检索、可复用检索服务（Top-K／来源过滤／批量）、RAG 问答闭环（无证据拒答／编号上下文／真实生成／引用核验）、检索侧优化（重叠分块与本地重排）、多格式知识库解析、RAG 评估与监控（两类指标 + SQLite 日志），ReAct Agent（模型提动作、Python 执行检索、观察回填对话、max_steps 控制停止）与 Agent 工具集（三项只读工具 + 白名单 + 结构化查询 + 计算工具），LangChain 核心（Runnable + Prompt + ChatDeepSeek + StrOutputParser 组合成链，同题对照旧 Agent），再往后是 Agent 执行器、Chain 编排、对话记忆、Plan-and-Solve 规划、多智能体（五角色 + 共享黑板）、群聊协作（三角色 + 轮次与成本双上限）、数据分析 Agent（字段白名单 + 固定算子，不执行生成代码），最后落到**单元24 的网页工作台**：FastAPI 后端接口 + 单页前端 + HMAC 令牌身份 + 角色权限 + 问答/审计/反馈/转人工四张表落库。所有数据均为课程虚构样例，只读，不接真实电商系统。
 
 ## 在 Trae 中打开
 
@@ -26,6 +26,16 @@ uv run python scripts/generate_evidence_unit13.py
 uv run python scripts/generate_evidence_unit14.py
 uv run python scripts/generate_evidence_unit15.py
 uv run python scripts/generate_evidence_unit16.py
+uv run python scripts/generate_evidence_unit23.py
+uv run python scripts/generate_evidence_unit24.py
+```
+
+单元24 的网页工作台单独一条命令起服务（会打印装配摘要与客服／主管两个令牌）：
+
+```powershell
+uv run --extra web python main.py --serve          # 默认 http://127.0.0.1:8000/
+uv run --extra web python main.py --serve 8021     # 换端口（也可写 --port 8021）
+uv run --extra web python main.py --issue-token A002 --role agent   # 只签一个令牌
 ```
 
 `--extra embedding`（单元06 向量模型）与 `--extra chroma`（单元07—10 向量库）都是可选依赖。只跑单元 02—05 时 `uv sync` 即可，其余命令不受影响。
@@ -72,9 +82,11 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 单元23 换的是**让模型碰数据、但不让它碰执行**：本单元目标写得很直白——Agent 安全读取项目 CSV，完成指定统计并用业务语言解释结果，**不执行任意生成代码**。守住这条的是三道设计：第一，模型两次发言都不碰数据本体——第一次只给它数据字典、字段白名单和 8 个固定算子（`count / sum / mean / max / min / group_count / group_sum / group_mean`），它只能回一个 JSON 口径（`{"metric": ..., "field": ..., "filters": {...}}`），**看不到一行数据、拿不到文件路径**；第二次只给它 Python 已经算好的结果，让它翻译成业务语言。第二，真正的加法全在 `compute()` 的 8 个分支里，模型想塞一段表达式（比如 `sum(x for x in rows)`）会被当成"未知算子"拒掉，`app/data_agent.py` 里没有 `eval(` / `exec(` / `__import__(`（有一条测试用 `inspect.getsource` 盯着）。第三，写完解释还有一道 `check_explanation`：每个带单位的数字都要能在结果里找到出处，找不到就点名列出——模型可以说"物流异常 8 单（25.0%）"，但不能自己造一个 8。**字段白名单的意义是"列存在 ≠ 可以统计"**：`case_id`、`order_id` 在表里真的有，但统计编号没有业务含义、还可能泄露客户信息，一律在统计之前拒绝（统计 0 次，连解释都不调）。**空值与非数字既不静默当 0，也不整行丢弃**：脏样本里跳过 3 行、参与 29 行，均值 162.34 元（当成 0 算只有 147.12），分组字段为空则归入「（空值）」组，行数一条都对得上。每个结果都带四行行数（总 / 筛选后 / 参与 / 跳过）+ 一条含除号的算式 + 前 5 行抽样，可以直接拿计算器复核。命令是 `/data`（最小场景）、`/data schema`（数据字典与白名单）、`/data refund`（数值聚合）、`/data handoff`（带筛选计数）、`/data dirty`（空值与非数字）、`/data forbidden`（越权字段）、`/data missing`（筛选后 0 行）、`/data bad`（守门）、`/data demo`（按任务卡四节课跑完）。
 
-默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit16/`、`.sqlite_unit15/`、`rag_monitor.sqlite3` 不会提交到 GitHub。
+单元24 换的是**产品形态**：前面 23 个单元都是命令行里的一次运行，本单元把检索、模型问答与业务查询装成一个**能独立运行的网页产品**——客服登录后查本人名下工单、做知识问答、给答复打反馈或转人工；主管在同一网页看反馈、转人工队列与调用记录，并确认人工处理。分层是接口层 `app/api.py`（只验身份、收参数，把 `NotFound` / `BadRequest` 翻译成 404 / 422）→ 业务层 `app/platform_service.py`（四路由分派与编排）→ 数据层（`app/platform_data.py` 读只读台账并做权限收窄、`app/platform_store.py` 落四张表），前端是 `web/index.html` 一个文件、**零 CDN、零构建步骤**。最关键的一条是**路由不交给模型**：工单号 `AS\d{5}` → ticket（Python 读 CSV）、`EC-FAQ-\d{2}` → faq（SQLite 参数化查询）、统计关键词 → analysis（复用单元23 的固定算子），这三类**一次模型都不调**（实测 0 / 1 / 1 ms），只有剩下的知识问答才调 1 次模型且只喂命中的资料。第二条是**不泄露“存在性”**：客服问别人的工单回 `404 未找到可访问的工单`，与“不存在”同一个结果，权限写进 SQL 的 `WHERE seat_id=?`，不是接口层顺手加个 if。第三条是**数字可复核**：数据看板不吐一个数字，而是把单元23 的行数链与算式一起回给页面（「物流异常 8（25.0%）…共 32 行」「占比 = 该组单数 ÷ 32」「退款合计 5544 元 = 32 行有效数值相加」）。身份是课堂用的 HMAC 签名令牌（`base64url(payload).base64url(HMAC-SHA256)`，8 小时有效，密钥在 `.runtime/token_secret` 首次自动生成），页面只把令牌放进 `sessionStorage`，关掉标签页即失效。四张表分开：`turns` 存问答、`audit` 只存路由/耗时/来源数（**不含问题正文**）、`feedback` 存评价、`handoffs` 存转人工状态；转人工只进队列，**不改写业务工单**（台账仍是只读 CSV）。命令是 `python main.py --serve`（页面 + 接口）、`/serve [端口]`（交互式里起服务）、`--issue-token A002 --role agent`（单签令牌）、`--init-secret`（只生成密钥）。
 
-依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation --extra langchain --extra classic`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。其中 `classic` 只给课程参考实现用（单元17～19 的示例代码 import `langchain_classic` / `langchain_chroma`），**本项目自己的代码不 import 它**，装上只是为了能在本机把参考实现跑起来做对照。
+默认 `.env` 使用离线 `mock` 模式，不需要 API Key。课程要求真实模型时，先执行 `uv pip install --python .venv/Scripts/python.exe -r requirements-deepseek.txt`，再在本机 `.env` 填写自己的 `DEEPSEEK_API_KEY` 并把 `LLM_PROVIDER` 改成 `deepseek`；真实模式使用 `.venv/Scripts/python.exe main.py` 启动。真实调用会产生 API 用量。`.env`、`.venv`、`models/`、`.chroma_unit7/`～`.chroma_unit16/`、`.chroma_unit24/`、`.sqlite_unit15/`、`.sqlite_unit24/`、`.runtime/`（单元24 的签名密钥与会话库）、`rag_monitor.sqlite3` 不会提交到 GitHub。
+
+依赖按单元分组，装齐用：`uv sync --extra deepseek --extra embedding --extra chroma --extra parse --extra evaluation --extra langchain --extra web --extra classic`。**注意 `uv sync` 会按 extras 重算依赖**，少写一个 extra 就会把对应的包卸掉（例如不带 `deepseek` 会卸掉 `openai`，真实模型模式当场失效）。`web` 只给单元24 的网页工作台用（`fastapi` + `uvicorn`），不跑服务时可以不装；`classic` 只给课程参考实现用（单元17～19 的示例代码 import `langchain_classic` / `langchain_chroma`），**本项目自己的代码不 import 它**，装上只是为了能在本机把参考实现跑起来做对照。
 
 ## 交互命令
 
@@ -158,6 +170,10 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
                 /data dirty 空值与非数字（跳过并如实报数）；/data forbidden 越权字段；
                 /data missing 筛选后 0 行（不是出错）；/data bad 无效问题与越界文件名；
                 /data demo 跑完四节课
+  /serve [端口]    单元24：启动网页工作台（FastAPI + 单页前端，默认 8000 端口）
+                启动后打印装配摘要与客服 A001 / 主管 M001 两个令牌；
+                浏览器打开 http://127.0.0.1:8000/ ，把令牌粘进左侧身份卡即可用；
+                也可以不启动交互式，直接 python main.py --serve [端口]
 /demo            跑通 3 个正常问题 + 2 个越权问题
 /history /clear /help /exit
 ```
@@ -241,7 +257,15 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `app/chat_lab.py`：单元22 编排（装资料与工具 → 六条路径 → 四节课 → 逐条验收）。
 - `app/data_agent.py`：单元23 数据分析（数据字典与字段白名单、`resolve_source` 目录守门、`load_table` / `scan_issues`、8 个固定算子的 `compute`、两次模型调用的分工与提示词、`check_explanation` 数字核验）。
 - `app/data_lab.py`：单元23 编排（装本组 CSV → 六条路径 → 四条标准 → 守门 → 概念表）。
-- `tests/`：单元01—23 单元测试，751 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—23 另需 `langchain`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
+- `app/platform_auth.py`：单元24 身份（HMAC 签名令牌 `issue_token` / `verify_token`、`Principal`、角色范围与 `require_admin`，纯标准库，不 import FastAPI）。
+- `app/platform_data.py`：单元24 工单台账（三份 CSV 的 join、`extract_ticket_id`、按坐席收窄的 `list_tickets` / `read_ticket`、`overview` 口径、坐席表）。
+- `app/platform_store.py`：单元24 会话库（`turns` / `audit` / `feedback` / `handoffs` 四张表、反馈覆盖、转人工生命周期、审计不含正文、管理台统计）。
+- `app/platform_runtime.py`：单元24 装配（模型 + 工具注册表 + 检索 + 会话库 + 台账 + 知识库索引 + FAQ 同步，启动摘要 `render_context`）。
+- `app/platform_service.py`：单元24 业务编排（`route_of` 四路由、工单/FAQ/统计/知识四个 handler、看板聚合、`render_routes`）。
+- `app/platform_errors.py`：单元24 业务层异常（`NotFound` / `BadRequest`，由接口层翻译成 404 / 422）。
+- `app/api.py`：单元24 接口层（12 条路由、`HTTPBearer` 取令牌、错误映射、`create_app`、`serve`）。
+- `web/index.html`：单元24 单页前端（对话 / 工单台账 / 数据看板 / 管理台四个视图，零 CDN、零构建步骤）。
+- `tests/`：单元01—24 单元测试，801 项（单元06 需 `embedding`、单元07—11 需 `chroma`、单元12 另需 `parse`、单元13 另需 `evaluation`、单元16—23 另需 `langchain`、单元24 的接口测试另需 `web`；真实模型用例需显式 `RUN_REAL_MODEL=1`）。
 - `docs/课堂验收证据.md`：单元02—05 的真实运行记录。
 - `docs/单元06验收证据.md`：单元06 的真实运行记录（由脚本生成，分数与报错均为实测）。
 - `docs/单元07验收证据.md`：单元07 的真实运行记录（建库两次 + 只读查看，脚本抓取）。
@@ -262,6 +286,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `docs/单元21验收证据.md`：单元21 的真实运行记录（架构与角色表、真实模型跑一次完整协作、每角色输入输出字段、评审修订、二次拒绝停止交付、证据不足、执行终止、无效输入、三条标准逐条验收，脚本抓取）。
 - `docs/单元22验收证据.md`：单元22 的真实运行记录（群聊结构与角色表、真实模型跑一次完整协作、逐位核对每人读到的提示词、轮次上限、成本上限、复核不通过、多轮往复、证据不足、无效任务与越界参数、四条标准逐条验收，脚本抓取）。
 - `docs/单元23验收证据.md`：单元23 的真实运行记录（数据字典与白名单、真实模型跑一次完整分析、两次调用各自读到什么、数值与筛选、脏数据、越权字段、筛选后 0 行、三道守门、不执行生成代码的源码核对、四条标准逐条验收，脚本抓取）。
+- `docs/单元24验收证据.md`：单元24 的真实运行记录（装配、台账与坐席、令牌签发/篡改/过期、四路由实测、权限隔离、闭环九步、数据看板口径、页面结构与外部依赖、启动方式、七条标准逐条验收，脚本抓取）。
 - `docs/单元05当堂日报.md`：组长日报，完成标准核对与分工登记。
 - `02-电商售后服务智能体-任务卡.docx`：项目范围、五人分工、阶段成果和验收要求。
 - `模拟数据/records.json`：30 条虚构订单记录。
@@ -270,6 +295,7 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 - `模拟数据/单元12项目资料/`：课程实践项目数据包的两组资料（本组 3 篇 md + 1 份 PDF + 1 份 CSV；对照项目同结构），共解析 14 条。
 - `模拟数据/单元13评估题/`：课程为两个项目组提供的评估题原件各一份（本组那一份同时放在项目根 `evaluation_cases.json` 作为激活题集）。
 - `模拟数据/单元23实践数据/电商售后服务智能体项目组/`：单元23 的分析数据——任务卡给的 `电商售后工单.csv`（32 行 × 10 列，原表只读）与从它派生的 `电商售后工单_脏数据.csv`（7 处坏值，只用于第4节验证空值与非数字）。
+- `模拟数据/单元24平台数据/`：单元24 工作台的三份数据——`售后工单台账.csv`（从单元23 的 `电商售后工单.csv` 原样复制，保证分析口径一致）、`坐席分工.csv`（32 张工单分给 4 名客服，各 8 张）、`坐席.csv`（4 名客服 + 1 名主管）。
 - `验证数据.py`：老师提供的数据检查脚本。
 
 ## 四个受控工具（全部只读）
@@ -283,10 +309,10 @@ uv run python setup_chroma.py      # 再跑一次，核对集合 ID 不变
 
 ## 小组任务与日报
 
-从 [项目管理/README.md](项目管理/README.md) 查看第 01—23 单元的五人分工、提交清单、验收标准和每日记录。任务安排与实际完成情况分开记录；完成后在对应日期的日报中填写本人结果和证据链接，由组长审核。
+从 [项目管理/README.md](项目管理/README.md) 查看第 01—24 单元的五人分工、提交清单、验收标准和每日记录。任务安排与实际完成情况分开记录；完成后在对应日期的日报中填写本人结果和证据链接，由组长审核。
 
 ## 来源
 
 代码取自 `unit1.zip/项目起始模板`；电商资料取自 `unit1.zip/自选项目任务包/02-电商售后服务智能体`。`unit5.zip` 的工单与报销课堂示例属于另一个演示场景，未并入本工程。`unit6`～`unit16` 的做法已按电商售后语料改造后并入（语料换成 `模拟数据/sample_questions.json` 与 `模拟数据/knowledge/`，参考实现里的工单／报销语料一律不用，集合名、元数据、项目标识、检索问题与真实业务问题也一并改造）。
 
-`unit17`～`unit22` 是编排与多智能体单元，参考实现都是在**另一套业务资料**（差旅报销）上演示的，本仓库统一换成电商售后的知识库、FAQ 库与只读工具：单元17 的 Agent 执行器接入单元15 的三项工具，单元18 的顺序步骤与条件分支走电商的答复／规则／材料三条路由，单元19 的对话记忆用售后会话做跨轮指代与跨进程召回，单元20 的规划在原地复用单元15 注册表，单元21 的五角色与单元22 的群聊都建立在同一批工具与资料之上（参考实现里的差旅报销对照资料未并入，相关跳过项在测试里如实标注）。`unit23` 的数据分析单元同样只取任务卡里**本组**那份 `电商售后工单.csv`（32 行 × 10 列），另一组（差旅报销）的 CSV 未使用；第4节要用的脏样本是从本组表派生的，7 处改动逐条写在验收证据里。
+`unit17`～`unit22` 是编排与多智能体单元，参考实现都是在**另一套业务资料**（差旅报销）上演示的，本仓库统一换成电商售后的知识库、FAQ 库与只读工具：单元17 的 Agent 执行器接入单元15 的三项工具，单元18 的顺序步骤与条件分支走电商的答复／规则／材料三条路由，单元19 的对话记忆用售后会话做跨轮指代与跨进程召回，单元20 的规划在原地复用单元15 注册表，单元21 的五角色与单元22 的群聊都建立在同一批工具与资料之上（参考实现里的差旅报销对照资料未并入，相关跳过项在测试里如实标注）。`unit23` 的数据分析单元同样只取任务卡里**本组**那份 `电商售后工单.csv`（32 行 × 10 列），另一组（差旅报销）的 CSV 未使用；第4节要用的脏样本是从本组表派生的，7 处改动逐条写在验收证据里。`24-企业智能服务智能体平台` 是收尾单元，参考实现里的企业工单（`T\d{8}`）、员工/管理员角色与深色页面，在本仓库改造成电商售后工单（`AS\d{5}`）、客服/主管角色与浅色业务后台；台账直接复用单元23 的那份 CSV，没有另造一套数据。

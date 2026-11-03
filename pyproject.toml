@@ -32,6 +32,12 @@ classic = [
     "langchain-classic>=1.0,<2",
     "langchain-chroma>=1.0,<2",
 ]
+# 单元24 网页工作台：FastAPI 提供接口、uvicorn 跑服务。缺这两个也能用命令行，
+# 只是 `/serve` 会提示安装；装上才有 web/index.html 那个工作台。
+web = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
 
 [tool.uv]
 index-url = "https://mirrors.aliyun.com/pypi/simple"

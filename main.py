@@ -180,6 +180,8 @@ HELP_TEXT = """可用命令：
                   /data missing 筛选后 0 行 → 如实说没有数据；
                   /data schema 数据字典与字段白名单；/data bad 越界与越权；
                   /data demo 按任务卡四节课跑完一遍
+  /serve [端口]    单元24：启动网页工作台（默认 8000），并打印客服与主管的令牌
+                  网页里能对话、查工单台账、看数据看板、主管处理转人工队列
   /demo            跑通 3 个正常问题 + 2 个越权问题
   /history         查看当前会话历史
   /clear           清空会话历史
@@ -2158,7 +2160,50 @@ def run_demo(session: AgentSession) -> None:
 # ---------------------------------------------------------------- 入口
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def _parse_args():
+    """命令行参数只服务单元24 的网页工作台；不带参数就进原来的交互式命令行。"""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="电商售后服务智能体（单元02—24）：不带参数启动命令行；--serve 启动网页工作台。"
+    )
+    parser.add_argument("--serve", action="store_true", help="启动网页工作台（单元24）")
+    parser.add_argument("--port", dest="port_option", type=int, default=None,
+                        help="网页端口，默认 8000（也可写成 --serve 8021）")
+    parser.add_argument("port", nargs="?", type=int, default=None,
+                        help="位置参数形式的端口，与 --port 等价")
+    parser.add_argument("--issue-token", metavar="SEAT", help="签发课堂令牌，例如 A001")
+    parser.add_argument("--role", default="agent", choices=["agent", "supervisor", "admin"],
+                        help="配合 --issue-token 使用，默认 agent")
+    parser.add_argument("--init-secret", action="store_true", help="只生成签名密钥，不启动服务")
+    # 允许被 IDE 塞进来的无关参数（例如 PyCharm 的附加参数），不让它打断启动。
+    args, _unknown = parser.parse_known_args()
+    args.port = args.port or args.port_option or 8000
+    return args
+
+
 def main() -> None:
+    args = _parse_args()
+    if args.init_secret:
+        from app.platform_auth import load_secret
+
+        load_secret(PROJECT_ROOT)
+        print("签名密钥已就绪：.runtime/token_secret（已在 .gitignore 里）")
+        return
+    if args.issue_token:
+        from app.platform_auth import issue_token
+
+        print(issue_token(args.issue_token, args.role, root=PROJECT_ROOT))
+        return
+    if args.serve:
+        from app.api import serve
+
+        serve(args.port)
+        return
+
     llm = build_llm()
     session = AgentSession(llm)
 
@@ -2271,6 +2316,12 @@ def main() -> None:
             continue
         if command == "/data":
             demo_data(payload or None)
+            continue
+        if command == "/serve":
+            from app.api import serve
+
+            serve(int(payload) if payload.isdigit() else 8000)
+            print("\n网页工作台已停止，回到命令行。")
             continue
         if command == "/compare":
             target = payload or NORMAL_QUESTIONS[0]

@@ -32,3 +32,7 @@ models/
 rag_monitor.sqlite3
 # 单元19 长期记忆库：装的是"用户说过的话"，不是资料，也不随仓库分发。
 .chroma_unit19_memory/
+# 单元24 网页工作台的运行产物：知识库（可重建）、FAQ 库、会话/审计库与签名密钥。
+.chroma_unit24/
+.sqlite_unit24/
+.runtime/

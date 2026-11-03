@@ -101,6 +101,18 @@ UNIT16_COLLECTION_METADATA = {
     "write_policy": "unit16_lcel_demo",
 }
 
+# 单元24 的网页工作台再用一个库：它是"最终产品"，知识库要能独立重建，
+# 所以不与单元15～16 的演示库共用 —— 重建索引时不该影响别的单元的验收现场。
+DEFAULT_UNIT24_DB_PATH = PROJECT_ROOT / ".chroma_unit24"
+UNIT24_COLLECTION = "after_sale_platform_knowledge"
+UNIT24_COLLECTION_METADATA = {
+    "purpose": "unit24_platform_knowledge",
+    "embedding_model": "BAAI/bge-small-zh-v1.5",
+    "dimension": 512,
+    "content_source": "模拟数据/单元12项目资料/电商售后服务智能体项目组（本组 3md+1pdf+1csv）",
+    "write_policy": "unit24_platform_reindex",
+}
+
 # 单元19 的长期记忆再单独用一个库目录：它装的不是资料，而是「用户说过的话」。
 # 与知识库混在一个集合里，检索证据时就会把上一轮的对话当成制度原文引用，
 # 答案无从核对——所以两库严格分开，连集合名都写清是 conversation_memory。
@@ -194,6 +206,12 @@ def resolve_unit19_memory_db_path() -> Path:
     """单元19 长期记忆库目录：默认 `.chroma_unit19_memory/`，可用 CHROMA_UNIT19_MEMORY_DB_DIR 覆盖。"""
     override = os.environ.get("CHROMA_UNIT19_MEMORY_DB_DIR", "").strip()
     return Path(override) if override else DEFAULT_UNIT19_MEMORY_DB_PATH
+
+
+def resolve_unit24_db_path() -> Path:
+    """单元24 工作台知识库目录：默认 `.chroma_unit24/`，可用 CHROMA_UNIT24_DB_DIR 覆盖。"""
+    override = os.environ.get("CHROMA_UNIT24_DB_DIR", "").strip()
+    return Path(override) if override else DEFAULT_UNIT24_DB_PATH
 
 
 def render_record_fields() -> str:
